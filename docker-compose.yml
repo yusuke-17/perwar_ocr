@@ -1,0 +1,14 @@
+services:
+  ocr:
+    build: .
+    platform: linux/amd64
+    volumes:
+      # ホスト側のフォルダをコンテナにマウント
+      - ./input:/app/input       # 入力画像を置くフォルダ
+      - ./output:/app/output     # 出力テキストの保存先
+      - ./models:/app/models     # 学習済みモデル保存先
+      - ./scripts:/app/scripts   # スクリプト（開発中は同期）
+      - ./utils:/app/utils       # ユーティリティ（開発中は同期）
+    # デフォルトではセットアップ確認を実行
+    # 実際のOCR実行時は docker compose run ocr python scripts/pipeline.py のように使う
+    command: python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(use_angle_cls=True, lang='japan'); print('セットアップ完了！')"

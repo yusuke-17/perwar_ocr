@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+prewar-ocr-env/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# データ（ボリュームマウントで渡すため）
+input/
+output/
+models/
+training_data/
+
+# その他
+.git/
+*.md
+.DS_Store

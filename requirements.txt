@@ -1,0 +1,5 @@
+paddlepaddle==3.3.0
+paddleocr>=2.9.0
+opencv-python-headless
+Pillow
+numpy
