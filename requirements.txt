@@ -1,5 +1,10 @@
-paddlepaddle==3.3.0
-paddleocr>=2.9.0
-opencv-python-headless
-Pillow
-numpy
+# OCRエンジン
+surya-ocr                    # Surya OCR（M1 Mac対応、★最有力候補）
+paddlepaddle                 # PaddlePaddle（PaddleOCRの基盤）
+paddleocr>=2.9.0             # PaddleOCR（日本語モデルあり）
+pytesseract                  # Tesseract OCR Python バインディング
+
+# 画像処理
+opencv-python-headless       # OpenCV（画像前処理）
+Pillow                       # 画像読み込み
+numpy                        # 数値計算
