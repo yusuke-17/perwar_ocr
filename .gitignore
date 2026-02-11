@@ -5,8 +5,9 @@ __pycache__/
 dist/
 build/
 
-# venv
+# uv / venv
 .venv/
+.python-version
 
 # 環境変数・機密情報
 .env

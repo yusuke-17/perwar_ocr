@@ -40,8 +40,11 @@
 | コンポーネント | 実行環境 | 理由 |
 |---|---|---|
 | Ollama + Vision LLM | **Macネイティブ** | Metal GPU加速が必須（Docker内だと激遅） |
-| Pythonスクリプト | **Macネイティブ (venv)** | Ollamaとの連携がシンプル |
-| Surya OCR | **Macネイティブ (venv)** | PyTorch Metal加速が活きる |
+| Pythonスクリプト | **Macネイティブ (uv)** | 高速な依存管理 + Ollamaとの連携がシンプル |
+| Surya OCR | **Macネイティブ (uv)** | PyTorch Metal加速が活きる |
+
+> **パッケージマネージャ**: `uv`（Rust製の高速Pythonパッケージマネージャ）を使用。
+> `pip` + `venv` の代わりに `uv` が仮想環境の作成・依存管理・スクリプト実行をすべて行う。
 
 ---
 
@@ -68,7 +71,7 @@ prewar-ocr/
 │   ├── kana_converter.py      # 歴史的仮名遣い→現代仮名遣い
 │   └── ollama_client.py       # Ollama API ラッパー
 ├── survey/                    # 調査レポート
-├── requirements.txt           # Macネイティブ用
+├── pyproject.toml             # プロジェクト設定 & 依存管理 (uv)
 ├── .gitignore
 └── README.md
 ```
@@ -105,30 +108,44 @@ prewar-ocr/
    ollama run gemma3:12b "こんにちは、日本語で答えてください"
    ```
 
-4. **Python venv作成**
+4. **uvでプロジェクト初期化 & 依存パッケージ追加**
    ```bash
    cd ~/Desktop/prewar-ocr
-   python3 -m venv .venv
-   source .venv/bin/activate
+
+   # プロジェクト初期化（pyproject.toml が作られる）
+   uv init
+
+   # Python 3.13 を使うように固定
+   uv python pin 3.13
+
+   # 依存パッケージを追加（自動で .venv も作られる）
+   uv add ollama surya-ocr opencv-python-headless Pillow numpy
    ```
 
-5. **パッケージインストール**
+   > **解説**: `uv add` を実行すると、uv が自動的に以下をやってくれる:
+   > 1. `.venv/` 仮想環境を作成（なければ）
+   > 2. パッケージをインストール
+   > 3. `pyproject.toml` に依存を記録
+   > 4. `uv.lock` ロックファイルを生成（再現性のため）
+   >
+   > `pip install` や `source .venv/bin/activate` は不要！
+
+5. **動作確認スクリプト実行**
    ```bash
-   pip install ollama surya-ocr opencv-python-headless Pillow numpy
+   uv run python scripts/setup_check.py
    ```
 
-6. **動作確認スクリプト実行**
-   ```bash
-   python scripts/setup_check.py
-   ```
+   > **解説**: `uv run` は自動的に仮想環境をアクティベートしてからコマンドを実行する。
+   > `source .venv/bin/activate` を手動で行う必要がない。
 
 #### 作成・修正するファイル
 
 | ファイル | 操作 | 内容 |
 |---|---|---|
-| `requirements.txt` | 修正 | Macネイティブ用（ollama, surya-ocr, opencv等） |
+| `pyproject.toml` | 新規 | `uv init` + `uv add` で自動生成される |
+| `uv.lock` | 新規 | `uv add` で自動生成（依存の再現性のため） |
 | `scripts/setup_check.py` | 新規 | Ollama接続確認、Vision LLM動作確認、Surya確認 |
-| `.gitignore` | 新規 | .venv/, .env, temp_*, __pycache__/ 等 |
+| `.gitignore` | 修正 | .venv/, .env, temp_*, __pycache__/ 等 |
 
 ---
 
@@ -213,20 +230,19 @@ prewar-ocr/
 **目的**: 全体を1つのコマンドで実行できるようにする
 
 ```bash
-# 使い方の例
-source .venv/bin/activate
+# 使い方の例（uv run で自動的に仮想環境が使われる）
 
 # 1枚の画像をVision LLMで処理
-python scripts/pipeline.py input/sample.jpg -e vision_llm -m gemma3:12b
+uv run python scripts/pipeline.py input/sample.jpg -e vision_llm -m gemma3:12b
 
 # 右横書きの画像
-python scripts/pipeline.py input/rtl_document.jpg --rtl
+uv run python scripts/pipeline.py input/rtl_document.jpg --rtl
 
 # フォルダ一括処理
-python scripts/pipeline.py input/ -o output/
+uv run python scripts/pipeline.py input/ -o output/
 
 # Surya OCRで処理（比較用）
-python scripts/pipeline.py input/sample.jpg -e surya
+uv run python scripts/pipeline.py input/sample.jpg -e surya
 ```
 
 #### 作成するファイル
