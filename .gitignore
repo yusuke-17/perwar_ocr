@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# venv
+.venv/
+
+# 環境変数・機密情報
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 一時ファイル
+temp_*
+*.tmp
+
+# モデルファイル（大きいのでGit管理しない）
+models/*.bin
+models/*.pt
+models/*.onnx
+models/*.safetensors
+
+# IDE
+.vscode/
+.idea/
+*.swp

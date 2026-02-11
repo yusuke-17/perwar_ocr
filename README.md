@@ -2,104 +2,71 @@
 
 戦前の日本語公文書（JACAR資料等）をOCRで読み取り、現代日本語に変換するツール。
 
+Ollama + Vision LLM（Gemma 3）をMacのローカルで動かすことで、クラウドAIと同等の画像認識を **データ漏洩ゼロ** で実現する。
+
 ## 前提条件
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) がインストール済みであること
-- M1/M2/M3 Mac で動作確認済み（`linux/amd64` エミュレーションを使用）
+- M1/M2/M3 Mac（Apple Silicon）
+- RAM 16GB 以上推奨（8GBでも動作可能）
+- Python 3.10 以上
+- [Ollama](https://ollama.com/download/mac) がインストール済みであること
 
-## 初回セットアップ
+## セットアップ
 
-Docker イメージをビルドする（初回のみ、数分かかる）:
+### 1. Ollama のインストール
+
+https://ollama.com/download/mac からダウンロードし、Applications にドラッグして起動する。
+
+### 2. Vision LLM モデルのダウンロード
 
 ```bash
-docker compose build
+# RAM 16GB以上の場合（推奨）
+ollama pull gemma3:12b
+
+# RAM 8GBの場合
+ollama pull gemma3:4b
 ```
 
-ビルド完了後、セットアップ確認を実行:
+動作確認:
 
 ```bash
-docker compose up
+ollama run gemma3:12b "こんにちは、日本語で答えてください"
 ```
 
-「セットアップ完了！」と表示されれば成功。`Ctrl + C` で停止。
-
-## コンテナの起動・停止
-
-### セットアップ確認（フォアグラウンド）
+### 3. Python 環境の構築
 
 ```bash
-docker compose up
+cd ~/Desktop/prewar-ocr
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-ターミナルにログが表示される。`Ctrl + C` で停止。
-
-### バックグラウンドで起動
+### 4. セットアップ確認
 
 ```bash
-docker compose up -d
+python scripts/setup_check.py
 ```
 
-### 停止
+## 使い方
 
 ```bash
-docker compose down
-```
+source .venv/bin/activate
 
-### ログ確認（バックグラウンド起動中）
+# 1枚の画像をVision LLMで処理
+python scripts/pipeline.py input/sample.jpg -e vision_llm -m gemma3:12b
 
-```bash
-docker compose logs
-```
+# 右横書きの画像
+python scripts/pipeline.py input/rtl_document.jpg --rtl
 
-リアルタイムでログを見続けるには:
+# フォルダ一括処理
+python scripts/pipeline.py input/ -o output/
 
-```bash
-docker compose logs -f
-```
-
-## OCR実行
-
-`input/` フォルダに画像を置き、以下のコマンドで実行:
-
-```bash
-docker compose run ocr python scripts/pipeline.py
+# Surya OCRで処理（比較用）
+python scripts/pipeline.py input/sample.jpg -e surya
 ```
 
 結果は `output/` フォルダに出力される。
-
-## コンテナ内に入る（デバッグ用）
-
-コンテナ内でコマンドを直接実行したいとき:
-
-```bash
-docker compose run ocr bash
-```
-
-コンテナ内から出るには `exit` と入力。
-
-## リビルド
-
-Dockerfile や requirements.txt を変更したら、再ビルドが必要:
-
-```bash
-docker compose build
-```
-
-キャッシュを使わず完全に再ビルドしたい場合:
-
-```bash
-docker compose build --no-cache
-```
-
-## 不要リソースの削除
-
-Docker の不要なイメージやキャッシュを削除してディスク容量を空けたいとき:
-
-```bash
-docker system prune
-```
-
-確認メッセージが出るので `y` で実行。
 
 ## フォルダ構成
 
@@ -110,3 +77,5 @@ docker system prune
 | `models/` | 学習済みモデルの保存先 |
 | `scripts/` | OCRパイプラインなどのスクリプト |
 | `utils/` | ユーティリティ関数 |
+| `training_data/` | 精度検証用の正解データ（画像・ラベル） |
+| `survey/` | 調査レポート |

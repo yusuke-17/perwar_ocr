@@ -29,7 +29,7 @@
 
 ### Vision LLMがメインの理由
 
-- **従来OCR**（Surya/PaddleOCR/Tesseract）= 学習した文字パターンを「認識」
+- **従来OCR**（Surya等）= 学習した文字パターンを「認識」
   → 旧字体は学習データにないので弱い
 - **Vision LLM**（Gemma 3等）= 画像全体を「理解」して文字を「推論」
   → 旧字体でも文脈から推測可能
@@ -42,7 +42,6 @@
 | Ollama + Vision LLM | **Macネイティブ** | Metal GPU加速が必須（Docker内だと激遅） |
 | Pythonスクリプト | **Macネイティブ (venv)** | Ollamaとの連携がシンプル |
 | Surya OCR | **Macネイティブ (venv)** | PyTorch Metal加速が活きる |
-| PaddleOCR/Tesseract | Docker (既存環境) | 比較テスト用のみ |
 
 ---
 
@@ -70,9 +69,6 @@ prewar-ocr/
 │   └── ollama_client.py       # Ollama API ラッパー
 ├── survey/                    # 調査レポート
 ├── requirements.txt           # Macネイティブ用
-├── requirements-docker.txt    # Docker比較テスト用
-├── Dockerfile
-├── docker-compose.yml
 ├── .gitignore
 └── README.md
 ```
@@ -131,7 +127,6 @@ prewar-ocr/
 | ファイル | 操作 | 内容 |
 |---|---|---|
 | `requirements.txt` | 修正 | Macネイティブ用（ollama, surya-ocr, opencv等） |
-| `requirements-docker.txt` | 新規 | Docker用（paddleocr, pytesseract等） |
 | `scripts/setup_check.py` | 新規 | Ollama接続確認、Vision LLM動作確認、Surya確認 |
 | `.gitignore` | 新規 | .venv/, .env, temp_*, __pycache__/ 等 |
 
@@ -146,7 +141,7 @@ prewar-ocr/
 | モード | 対象 | 処理内容 |
 |---|---|---|
 | Vision LLM用 | Gemma 3等 | 軽い補正のみ（コントラスト調整、右横書き反転）。二値化しない |
-| 従来型OCR用 | Surya/PaddleOCR | フル前処理（グレースケール、ノイズ除去、適応的二値化） |
+| 従来型OCR用 | Surya OCR | フル前処理（グレースケール、ノイズ除去、適応的二値化） |
 
 **なぜ分けるのか**: Vision LLMは元画像に近い状態の方が「文脈を理解」しやすい。二値化すると情報が失われて逆効果になる。
 
