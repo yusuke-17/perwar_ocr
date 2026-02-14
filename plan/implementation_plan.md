@@ -127,9 +127,11 @@ prewar-ocr/
    uv python pin 3.13
 
    # 依存パッケージを追加（自動で .venv も作られる）
-   uv add ollama surya-ocr opencv-python-headless Pillow numpy
+   uv add ollama surya-ocr opencv-python-headless Pillow numpy requests
    ```
 
+   > **注意**: `surya-ocr` は内部で `requests` を使うが依存宣言に含まれていないため、明示的に追加が必要。
+   >
    > **解説**: `uv add` を実行すると、uv が自動的に以下をやってくれる:
    > 1. `.venv/` 仮想環境を作成（なければ）
    > 2. パッケージをインストール

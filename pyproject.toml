@@ -1,0 +1,14 @@
+[project]
+name = "prewar-ocr"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.4.2",
+    "ollama>=0.6.1",
+    "opencv-python-headless>=4.11.0.86",
+    "pillow>=10.4.0",
+    "requests>=2.32.5",
+    "surya-ocr>=0.17.1",
+]

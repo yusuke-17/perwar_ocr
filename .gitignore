@@ -20,11 +20,19 @@ Thumbs.db
 temp_*
 *.tmp
 
+# 機密資料（漏洩防止）
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+training_data/images/*
+training_data/labels/*
+!training_data/images/.gitkeep
+!training_data/labels/.gitkeep
+
 # モデルファイル（大きいのでGit管理しない）
-models/*.bin
-models/*.pt
-models/*.onnx
-models/*.safetensors
+models/*
+!models/.gitkeep
 
 # IDE
 .vscode/
