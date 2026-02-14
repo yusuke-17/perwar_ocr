@@ -1,17 +1,18 @@
 # 戦前日本語OCR — 実装プラン
 
 作成日: 2026-02-10
+改訂日: 2026-02-14
 
 ---
 
 ## Context（なぜこの変更が必要か）
 
 戦前日本語公文書をOCRで読み取りたいが、以下の制約がある:
-- **M1 Mac** → NVIDIA GPUなし → NDLOCR使用不可
+- **M4 Mac** → NVIDIA GPUなし → NDLOCR使用不可
 - **資料の外部送信禁止** → ChatGPT/Claude等のクラウドAI不可
 - ChatGPT等のクラウドAI（Vision機能）は精度が高いが、外部送信になるので使えない
 
-**解決策**: **Ollama + Vision LLM（Gemma 3等）をMacのローカルで動かす**ことで、クラウドAIと同等の画像認識をデータ漏洩ゼロで実現する。
+**解決策**: **Ollama + Vision LLM（GLM-OCR）をMacのローカルで動かす**ことで、クラウドAIと同等の画像認識をデータ漏洩ゼロで実現する。
 
 ---
 
@@ -23,7 +24,7 @@
                          +-------------+-------------+
                          |                           |
                   [メイン] Vision LLM          [補助] Surya OCR
-                  Gemma 3 via Ollama           従来型文字認識
+                  GLM-OCR via Ollama           従来型文字認識
                   (Macネイティブ)              (Macネイティブ)
 ```
 
@@ -31,15 +32,28 @@
 
 - **従来OCR**（Surya等）= 学習した文字パターンを「認識」
   → 旧字体は学習データにないので弱い
-- **Vision LLM**（Gemma 3等）= 画像全体を「理解」して文字を「推論」
+- **Vision LLM**（GLM-OCR等）= 画像全体を「理解」して文字を「推論」
   → 旧字体でも文脈から推測可能
 - さらにプロンプト指示で「旧字体→新字体変換」まで一発で可能（後処理不要の可能性）
+
+### なぜGLM-OCRか
+
+| モデル | サイズ | 日本語OCR | 備考 |
+|---|---|---|---|
+| **GLM-OCR** | **0.9B** | **★★★★★** | **OCR専用設計、CJK高精度、超高速（1.86頁/秒）、OmniDocBench SOTA** |
+| Qwen3-VL | 8B | ★★★★☆ | 古文字・希少文字認識強化、汎用Vision LLM |
+| Qwen2.5-VL | 7B | ★★★★☆ | OCRBench 75%（GPT-4o相当）、実績豊富 |
+| Gemma 3 | 12B | ★★★☆☆ | 汎用的に良いが日本語OCR専用の強みなし |
+| Llama 3.2 Vision | 11B | ★☆☆☆☆ | 日中文字の区別不可。避けるべき |
+| Phi-4 Multimodal | — | ★☆☆☆☆ | Vision入力は英語のみ。避けるべき |
+
+GLM-OCRはOCR専用に設計されたモデルで、わずか0.9Bながら文書認識ベンチマーク（OmniDocBench V1.5）で94.6点のSOTAを達成。CJK（中日韓）を明示的にサポートしており、24GB RAMでは余裕で動作する。
 
 ### 環境方針
 
 | コンポーネント | 実行環境 | 理由 |
 |---|---|---|
-| Ollama + Vision LLM | **Macネイティブ** | Metal GPU加速が必須（Docker内だと激遅） |
+| Ollama + GLM-OCR | **Macネイティブ** | Metal GPU加速が必須（Docker内だと激遅） |
 | Pythonスクリプト | **Macネイティブ (uv)** | 高速な依存管理 + Ollamaとの連携がシンプル |
 | Surya OCR | **Macネイティブ (uv)** | PyTorch Metal加速が活きる |
 
@@ -82,7 +96,7 @@ prewar-ocr/
 
 ### Step 1: 環境構築
 
-**目的**: Ollama + Gemma 3 Vision をMacで動かせるようにする
+**目的**: Ollama + GLM-OCR をMacで動かせるようにする
 
 #### 手順
 
@@ -91,21 +105,15 @@ prewar-ocr/
    - Ollama.app を Applications にドラッグ
    - 起動（メニューバーにアイコンが出る）
 
-2. **Vision LLMモデルをダウンロード**
+2. **GLM-OCRモデルをダウンロード**
    ```bash
-   # RAM 16GB以上のMacの場合（推奨）
-   ollama pull gemma3:12b
-
-   # RAM 8GBのMacの場合
-   ollama pull gemma3:4b
-
-   # 比較用（オプション）
-   ollama pull qwen3-vl:8b
+   ollama pull glm-ocr
    ```
+   > GLM-OCRは0.9Bと超軽量なので、ダウンロードもすぐ終わる。
 
 3. **Ollama動作確認**
    ```bash
-   ollama run gemma3:12b "こんにちは、日本語で答えてください"
+   ollama run glm-ocr "こんにちは、日本語で答えてください"
    ```
 
 4. **uvでプロジェクト初期化 & 依存パッケージ追加**
@@ -144,7 +152,7 @@ prewar-ocr/
 |---|---|---|
 | `pyproject.toml` | 新規 | `uv init` + `uv add` で自動生成される |
 | `uv.lock` | 新規 | `uv add` で自動生成（依存の再現性のため） |
-| `scripts/setup_check.py` | 新規 | Ollama接続確認、Vision LLM動作確認、Surya確認 |
+| `scripts/setup_check.py` | 新規 | Ollama接続確認、GLM-OCR動作確認、Surya確認 |
 | `.gitignore` | 修正 | .venv/, .env, temp_*, __pycache__/ 等 |
 
 ---
@@ -157,7 +165,7 @@ prewar-ocr/
 
 | モード | 対象 | 処理内容 |
 |---|---|---|
-| Vision LLM用 | Gemma 3等 | 軽い補正のみ（コントラスト調整、右横書き反転）。二値化しない |
+| Vision LLM用 | GLM-OCR等 | 軽い補正のみ（コントラスト調整、右横書き反転）。二値化しない |
 | 従来型OCR用 | Surya OCR | フル前処理（グレースケール、ノイズ除去、適応的二値化） |
 
 **なぜ分けるのか**: Vision LLMは元画像に近い状態の方が「文脈を理解」しやすい。二値化すると情報が失われて逆効果になる。
@@ -178,8 +186,7 @@ prewar-ocr/
 
 | エンジン | 予想精度 | 処理速度 | 特徴 |
 |---|---|---|---|
-| Gemma 3 12B | 70-85% | 30-120秒/枚 | 文脈理解力が強み。旧字体→現代語変換も一発 |
-| Qwen3-VL 8B | 65-80% | 20-90秒/枚 | OCRBenchで高スコア |
+| GLM-OCR 0.9B | 80-95% | 1-5秒/枚 | OCR専用設計、CJK高精度、超高速 |
 | Surya OCR | 50-70% | 5-15秒/枚 | 速い。旧字体認識は弱い可能性 |
 
 #### テスト方法
@@ -200,9 +207,9 @@ prewar-ocr/
 
 | ファイル | 操作 | 内容 |
 |---|---|---|
-| `scripts/ocr_vision_llm.py` | 新規 | Vision LLM OCR（戦前文書用プロンプト付き） |
+| `scripts/ocr_vision_llm.py` | 新規 | GLM-OCR によるOCR（戦前文書用プロンプト付き） |
 | `scripts/ocr_surya.py` | 新規 | Surya OCR ラッパー |
-| `scripts/ocr_compare.py` | 新規 | 全エンジン比較実行＋精度計測 |
+| `scripts/ocr_compare.py` | 新規 | GLM-OCR vs Surya 比較実行＋精度計測 |
 | `utils/ollama_client.py` | 新規 | Ollama APIラッパー |
 
 ---
@@ -232,8 +239,8 @@ prewar-ocr/
 ```bash
 # 使い方の例（uv run で自動的に仮想環境が使われる）
 
-# 1枚の画像をVision LLMで処理
-uv run python scripts/pipeline.py input/sample.jpg -e vision_llm -m gemma3:12b
+# 1枚の画像をGLM-OCRで処理
+uv run python scripts/pipeline.py input/sample.jpg -e glm-ocr
 
 # 右横書きの画像
 uv run python scripts/pipeline.py input/rtl_document.jpg --rtl
@@ -257,8 +264,8 @@ uv run python scripts/pipeline.py input/sample.jpg -e surya
 
 | 順位 | ステップ | 理由 |
 |---|---|---|
-| 1 (最優先) | Step 1: Ollamaインストール + Gemma 3動作確認 | 土台が必要 |
-| 2 (高) | Step 3-a: Vision LLM OCRスクリプト | まず1枚読ませて手応えを確認 |
+| 1 (最優先) | Step 1: Ollamaインストール + GLM-OCR動作確認 | 土台が必要 |
+| 2 (高) | Step 3-a: GLM-OCR OCRスクリプト | まず1枚読ませて手応えを確認 |
 | 3 (高) | Step 3-c: 比較テスト | メインエンジンを確定 |
 | 4 (中) | Step 2: 画像前処理 | 精度改善 |
 | 5 (中) | Step 4: 後処理 | Vision LLMの結果次第で不要かも |
@@ -279,9 +286,9 @@ uv run python scripts/pipeline.py input/sample.jpg -e surya
 
 | リスク | 対策 |
 |---|---|
-| Vision LLMの戦前日本語精度が不十分 | 複数モデル比較（Gemma 3, Qwen3-VL）。Surya OCRへフォールバック |
-| RAM 8GBで12Bモデルが動かない | gemma3:4b を使用 |
-| Vision LLMの処理が遅すぎる | 4Bモデルに切替。バッチ処理実装 |
+| GLM-OCRの戦前日本語精度が不十分 | Qwen3-VL 8B等の大型モデルで再検証。Surya OCRへフォールバック |
+| GLM-OCRが旧字体→新字体変換できない | 0.9Bは小さいため変換能力が限定的な場合あり。後処理（Step 4）で対応 |
+| Vision LLMの処理が遅すぎる | GLM-OCRは0.9Bなので速度問題は起きにくい |
 | 旧字体→新字体辞書が不完全 | Vision LLMに変換を任せる方針にシフト |
 
 ---
@@ -291,8 +298,7 @@ uv run python scripts/pipeline.py input/sample.jpg -e surya
 | リソース | URL |
 |---|---|
 | Ollama公式（Mac版DL） | https://ollama.com/download/mac |
-| Gemma 3 on Ollama | https://ollama.com/library/gemma3 |
-| Qwen3-VL on Ollama | https://ollama.com/library/qwen3-vl |
+| GLM-OCR on Ollama | https://ollama.com/library/glm-ocr |
 | Surya OCR GitHub | https://github.com/datalab-to/surya |
 | Ollama Python Client | https://github.com/ollama/ollama-python |
 | JACAR（アジア歴史資料センター） | https://www.jacar.go.jp/ |
