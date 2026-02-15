@@ -2,6 +2,7 @@
 後処理スクリプト — OCR出力テキストを現代日本語に変換
 
 旧字体→新字体、歴史的仮名遣い→現代仮名遣いの変換を行う。
+--modernize オプションでLLMによる文語体→口語体リライトも実行可能。
 
 使い方:
     # テキストファイル1つを変換
@@ -18,6 +19,12 @@
 
     # 変換前後の差分を表示
     uv run python scripts/postprocess.py output/sample_ocr.txt --diff
+
+    # LLMで文語体→口語体にリライト
+    uv run python scripts/postprocess.py output/sample_ocr.txt --modernize
+
+    # リライト用モデルを変更
+    uv run python scripts/postprocess.py output/sample_ocr.txt --modernize --modernize-model qwen3:8b
 """
 
 import argparse
@@ -36,6 +43,8 @@ def postprocess(
     text: str,
     convert_chars: bool = True,
     convert_kana: bool = True,
+    modernize: bool = False,
+    modernize_model: str = "qwen3:14b",
 ) -> str:
     """
     OCR出力テキストに後処理を適用する
@@ -44,6 +53,8 @@ def postprocess(
         text: OCR出力テキスト
         convert_chars: 旧字体→新字体変換を行うか
         convert_kana: 歴史的仮名遣い→現代仮名遣い変換を行うか
+        modernize: LLMで文語体→口語体リライトを行うか
+        modernize_model: リライトに使用するLLMモデル名
 
     Returns:
         変換後のテキスト
@@ -52,6 +63,11 @@ def postprocess(
         text = convert_old_to_new(text)
     if convert_kana:
         text = convert_historical_kana(text)
+    if modernize:
+        from utils.text_modernizer import TextModernizer
+
+        modernizer = TextModernizer(model=modernize_model)
+        text = modernizer.modernize(text)
     return text
 
 
@@ -76,11 +92,15 @@ def process_file(
     output_path: Path | None,
     convert_chars: bool,
     convert_kana: bool,
+    modernize: bool,
+    modernize_model: str,
     show_changes: bool,
 ) -> None:
     """1つのテキストファイルを後処理する"""
     original = input_path.read_text(encoding="utf-8")
-    converted = postprocess(original, convert_chars, convert_kana)
+    converted = postprocess(
+        original, convert_chars, convert_kana, modernize, modernize_model
+    )
 
     # 変換統計
     old_chars = find_old_chars(original) if convert_chars else []
@@ -146,6 +166,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="変換箇所の詳細を表示する",
     )
+    parser.add_argument(
+        "--modernize",
+        action="store_true",
+        help="LLMを使って文語体を現代口語体にリライトする",
+    )
+    parser.add_argument(
+        "--modernize-model",
+        type=str,
+        default="qwen3:14b",
+        help="リライトに使用するLLMモデル名（デフォルト: qwen3:14b）",
+    )
 
     return parser.parse_args()
 
@@ -166,11 +197,15 @@ def main() -> int:
     print("=" * 50)
     print(f"  旧字体変換: {'ON' if convert_chars else 'OFF'}")
     print(f"  旧仮名変換: {'ON' if convert_kana else 'OFF'}")
+    print(f"  LLMリライト: {'ON (' + args.modernize_model + ')' if args.modernize else 'OFF'}")
 
     if input_path.is_file():
         # 単一ファイル
         output_path = Path(args.output) if args.output else None
-        process_file(input_path, output_path, convert_chars, convert_kana, args.diff)
+        process_file(
+            input_path, output_path, convert_chars, convert_kana,
+            args.modernize, args.modernize_model, args.diff,
+        )
 
     elif input_path.is_dir():
         # ディレクトリ内の全 .txt を処理
@@ -191,7 +226,10 @@ def main() -> int:
             else:
                 output_path = None
 
-            process_file(txt_file, output_path, convert_chars, convert_kana, args.diff)
+            process_file(
+                txt_file, output_path, convert_chars, convert_kana,
+                args.modernize, args.modernize_model, args.diff,
+            )
 
     print("\n完了!")
     return 0
