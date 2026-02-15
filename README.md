@@ -18,10 +18,14 @@ Ollama + GLM-OCR（OCR専用Vision LLM）をMacのローカルで動かすこと
 
 https://ollama.com/download/mac からダウンロードし、Applications にドラッグして起動する。
 
-### 2. GLM-OCR モデルのダウンロード
+### 2. モデルのダウンロード
 
 ```bash
+# OCR用モデル（必須）
 ollama pull glm-ocr
+
+# 現代語リライト用モデル（--modernize を使う場合）
+ollama pull qwen3:14b
 ```
 
 ### 3. uv のインストールと依存パッケージの導入
@@ -78,6 +82,18 @@ uv run python scripts/postprocess.py output/sample_ocr.txt --diff
 uv run python scripts/postprocess.py output/sample_ocr.txt --no-kana
 ```
 
+### 文語体→口語体リライト（LLMによる現代語化）
+
+旧字体・旧仮名の変換だけでは読みにくい場合、`--modernize` オプションで LLM（Qwen3 14B）が文語体を現代の口語体に書き換える。
+
+```bash
+# LLMリライト付きで変換
+uv run python scripts/postprocess.py output/sample_ocr.txt --modernize
+
+# リライト用モデルを変更（軽量モデルで高速化したい場合）
+uv run python scripts/postprocess.py output/sample_ocr.txt --modernize --modernize-model qwen3:8b
+```
+
 ### 典型的なワークフロー
 
 ```bash
@@ -88,6 +104,11 @@ uv run python scripts/ocr_vision_llm.py input/戦前文書.png
 uv run python scripts/postprocess.py output/戦前文書_ocr.txt
 
 # → output/戦前文書_ocr_modern.txt が生成される
+
+# 3.（任意）文語体を口語体にリライトする
+uv run python scripts/postprocess.py output/戦前文書_ocr.txt --modernize
+
+# → 旧字体変換 + 旧仮名変換 + LLMリライトが一括で実行される
 ```
 
 ## フォルダ構成
