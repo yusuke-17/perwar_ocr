@@ -8,18 +8,30 @@
 - Python 3.13+ / uv（パッケージ管理）
 - Ollama + GLM-OCR（メインOCRエンジン、0.9B）
 - Surya OCR（補助・比較用）
-- 後処理: 旧字体変換（辞書ベース）、仮名変換、LLMリライト（qwen3:14b）
+- 後処理: joyokanji（旧字体変換）、jaconv（全角正規化）、仮名変換、LLMリライト（qwen3:14b）
 
 ## よく使うコマンド
 ```bash
-# OCR実行
+# OCR実行（画像）
 uv run python scripts/ocr_vision_llm.py input/画像.png
 
-# 後処理（旧字体・仮名変換）
+# OCR実行（PDF）
+uv run python scripts/ocr_vision_llm.py input/文書.pdf
+
+# OCR実行（PDFの特定ページのみ）
+uv run python scripts/ocr_vision_llm.py input/文書.pdf --pages 1-5
+
+# 後処理（テキスト正規化: 旧字体・仮名・OCR誤読修正）
 uv run python scripts/postprocess.py output/結果.txt
 
-# 後処理（文語体→口語体リライト含む）
+# 後処理（正規化 + 文語体→口語体リライト）
 uv run python scripts/postprocess.py output/結果.txt --modernize
+
+# 正規化をスキップ
+uv run python scripts/postprocess.py output/結果.txt --no-normalize
+
+# 変換前後の差分を表示
+uv run python scripts/postprocess.py output/結果.txt --diff
 
 # 環境確認
 uv run python scripts/setup_check.py
