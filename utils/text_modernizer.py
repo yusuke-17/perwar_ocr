@@ -167,6 +167,7 @@ class TextModernizer:
             response = ollama.chat(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
+                think=False,
             )
         except ConnectionError:
             raise OllamaConnectionError(

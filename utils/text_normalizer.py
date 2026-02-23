@@ -26,6 +26,7 @@ import jaconv
 import joyokanji
 
 from utils.kana_converter import convert_historical_kana
+from utils.katakana_particle_converter import convert_katakana_particles
 
 
 # ---------- OCR誤読 修正辞書 ----------
@@ -145,7 +146,8 @@ def normalize_text(text: str) -> str:
       3. 半角→全角統一（jaconv）
       4. 歴史的仮名遣い→現代仮名遣い
       5. OCR誤読修正（辞書ベース + 文脈依存）
-      6. 句読点・空白の正規化
+      6. カタカナ助詞→ひらがな
+      7. 句読点・空白の正規化
 
     ヘッダー行（# で始まる行）はスキップする。
 
@@ -171,7 +173,9 @@ def normalize_text(text: str) -> str:
     # ⑤ OCR誤読修正
     body = _correct_ocr_misreads(body)
     body = _correct_context_misreads(body)
-    # ⑥ 句読点・空白
+    # ⑥ カタカナ助詞→ひらがな
+    body = convert_katakana_particles(body)
+    # ⑦ 句読点・空白
     body = _normalize_punctuation(body)
     body = _normalize_whitespace(body)
 
