@@ -44,7 +44,7 @@ def postprocess(
     text: str,
     normalize: bool = True,
     modernize: bool = False,
-    modernize_model: str = "qwen3:14b",
+    modernize_model: str = "qwen3.5:4b",
 ) -> str:
     """
     OCR出力テキストに後処理を適用する
@@ -155,8 +155,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--modernize-model",
         type=str,
-        default="qwen3:14b",
-        help="リライトに使用するLLMモデル名（デフォルト: qwen3:14b）",
+        default="qwen3.5:4b",
+        help="リライトに使用するLLMモデル名（デフォルト: qwen3.5:4b）",
     )
 
     return parser.parse_args()

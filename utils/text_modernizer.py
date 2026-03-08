@@ -17,24 +17,37 @@ from utils.ollama_client import OllamaConnectionError, OllamaModelNotFoundError
 
 # ---------- 定数 ----------
 
-DEFAULT_TEXT_MODEL = "qwen3:14b"
+DEFAULT_TEXT_MODEL = "qwen3.5:4b"
 
 # チャンク分割の設定
 DEFAULT_CHUNK_SIZE = 2000  # 文字数
 DEFAULT_CHUNK_OVERLAP = 200  # オーバーラップ文字数
 
-MODERNIZATION_PROMPT = """\
-あなたは戦前日本語の専門家です。以下のテキストを現代日本語に書き換えてください。
+SYSTEM_PROMPT = """\
+あなたは戦前の文語体日本語を現代の口語体に書き換える専門家です。
+文語体の表現をすべて口語体に変換してください。固有名詞はそのまま保持してください。
+出力は変換後のテキストのみ。説明や注釈は一切不要です。"""
 
-ルール:
-1. 文語体 → 口語体に変換する（ニシテ→であり、ナリ→である 等）
-2. カタカナ助詞・助動詞 → ひらがなに変換する（ノ→の、ニ→に、ヲ→を 等）
-3. 長すぎる文は適切な箇所で分割する
-4. 句読点を適切に追加する
-5. 原文の意味・内容を正確に保つ（要約や解釈は加えない）
-6. 固有名詞（人名・地名・年号）はそのまま保持する
-
-出力は変換後のテキストのみ。説明や注釈は不要。"""
+# Few-shot例（小さいモデルの指示追従を向上させるため）
+# 出典: 大日本帝国憲法・教育勅語・陸軍省通達（いずれも公知の歴史的文書）
+FEW_SHOT_EXAMPLES = [
+    {
+        "input": "日本臣民ハ法律ノ定ムル所ニ従ヒ納税ノ義務ヲ有ス。"
+        "日本臣民ハ法律命令ノ規定ニ従ヒ兵役ノ義務ヲ有ス。",
+        "output": "日本臣民は、法律の定めるところに従い、納税の義務を有する。"
+        "日本臣民は、法律命令の規定に従い、兵役の義務を有する。",
+    },
+    {
+        "input": "朕惟フニ我ガ皇祖皇宗國ヲ肇ムルコト宏遠ニ德ヲ樹ツルコト深厚ナリ。"
+        "我ガ臣民克ク忠ニ克ク孝ニ億兆心ヲ一ニシテ世世厥ノ美ヲ濟セルハ此レ我ガ國體ノ精華ニシテ教育ノ淵源亦實ニ此ニ存ス。",
+        "output": "思うに、我が皇祖皇宗が国を始められたことは広大で遠く、徳を立てられたことは深く厚い。"
+        "我が臣民がよく忠に、よく孝に、億兆が心を一つにして代々その美風を成し遂げてきたことは、これが我が国体の精華であり、教育の源もまた実にここにある。",
+    },
+    {
+        "input": "軍司令官ハ直チニ命令ヲ下達セリ。各部隊ハ之ニ基キ速ヤカニ行動ヲ開始スベシ。",
+        "output": "軍司令官はただちに命令を伝達した。各部隊はこれに基づき、速やかに行動を開始すべきである。",
+    },
+]
 
 
 # ---------- メインクラス ----------
@@ -161,13 +174,23 @@ class TextModernizer:
         """1チャンクをOllama APIでリライトする"""
         import ollama
 
-        prompt = MODERNIZATION_PROMPT + "\n\n--- 入力テキスト ---\n" + chunk
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        for example in FEW_SHOT_EXAMPLES:
+            messages.append({"role": "user", "content": example["input"]})
+            messages.append({"role": "assistant", "content": example["output"]})
+        messages.append({"role": "user", "content": chunk})
 
         try:
             response = ollama.chat(
                 model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 think=False,
+                options={
+                    "temperature": 0.7,
+                    "top_p": 0.8,
+                    "top_k": 20,
+                    "presence_penalty": 1.5,
+                },
             )
         except ConnectionError:
             raise OllamaConnectionError(
