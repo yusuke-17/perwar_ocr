@@ -8,7 +8,7 @@
 - Python 3.13+ / uv（パッケージ管理）
 - Ollama + GLM-OCR（メインOCRエンジン、0.9B）
 - Surya OCR（補助・比較用）
-- 後処理: joyokanji（旧字体変換）、jaconv（全角正規化）、仮名変換、LLMリライト（qwen3:14b）
+- 後処理: joyokanji（旧字体変換）、jaconv（全角正規化）、仮名変換、LLMリライト（qwen3.5:9b）
 
 ## よく使うコマンド
 ```bash
@@ -46,13 +46,12 @@ uv add <package>
 - `utils/` - ユーティリティモジュール（ライブラリ）
 - `input/` / `output/` - 入出力データ（Git管理外）
 - `models/` - モデルファイル（Git管理外）
-- `training_data/` - 精度検証用データ（images/はGit管理外）
 - `plan/` - 実装計画
 - `survey/` - 調査レポート
 
 ## 開発ルール
 - Python実行は必ず `uv run` 経由
-- 機密資料（input/, output/, training_data/images/）はGit管理しない
+- 機密資料（input/, output/）はGit管理しない
 - 新しいライブラリ追加時は `uv add` を使用
 - **外部API・クラウドサービスへの資料送信は絶対禁止**
 

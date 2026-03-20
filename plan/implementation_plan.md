@@ -69,9 +69,6 @@ prewar-ocr/
 ├── input/                     # 入力画像を置くフォルダ
 ├── output/                    # 出力テキストの保存先
 ├── models/                    # 学習済みモデル保存先
-├── training_data/             # 精度検証用の正解データ
-│   ├── images/                # テスト画像
-│   └── labels/                # 正解テキスト（手動作成）
 ├── scripts/
 │   ├── setup_check.py         # Step 1: 環境構築の動作確認
 │   ├── preprocess.py          # Step 2: 画像前処理 (OpenCV)
@@ -194,7 +191,7 @@ prewar-ocr/
 #### テスト方法
 
 1. テスト画像を `input/` に3-5枚用意（JACAR等から取得）
-2. 正解テキストを手動作成して `training_data/labels/` に配置
+2. 正解テキストを手動作成
 3. `ocr_compare.py` で文字一致率・処理速度を比較
 
 #### チェックポイント

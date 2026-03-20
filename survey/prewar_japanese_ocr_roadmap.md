@@ -21,9 +21,6 @@ prewar-ocr/
 ├── input/                  # 入力画像を置くフォルダ
 ├── output/                 # 出力テキストを保存するフォルダ
 ├── models/                 # 学習済みモデル・カスタムモデル
-├── training_data/          # 学習データ（画像＋正解テキスト）
-│   ├── images/
-│   └── labels/
 ├── scripts/
 │   ├── preprocess.py       # Step 2: 画像前処理
 │   ├── ocr_compare.py      # Step 3: OCR比較テスト
