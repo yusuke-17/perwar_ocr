@@ -12,26 +12,8 @@
 
 ## よく使うコマンド
 ```bash
-# OCR実行（画像）
+# 画像 → OCR → 正規化 → 口語体変換（一括実行）
 uv run python scripts/ocr_vision_llm.py input/画像.png
-
-# OCR実行（PDF）
-uv run python scripts/ocr_vision_llm.py input/文書.pdf
-
-# OCR実行（PDFの特定ページのみ）
-uv run python scripts/ocr_vision_llm.py input/文書.pdf --pages 1-5
-
-# 後処理（テキスト正規化: 旧字体・仮名・OCR誤読修正）
-uv run python scripts/postprocess.py output/結果.txt
-
-# 後処理（正規化 + 文語体→口語体リライト）
-uv run python scripts/postprocess.py output/結果.txt --modernize
-
-# 正規化をスキップ
-uv run python scripts/postprocess.py output/結果.txt --no-normalize
-
-# 変換前後の差分を表示
-uv run python scripts/postprocess.py output/結果.txt --diff
 
 # 環境確認
 uv run python scripts/setup_check.py

@@ -1,9 +1,10 @@
 """
-GLM-OCR による画像テキスト読み取りスクリプト
+戦前日本語OCRスクリプト — 画像から現代日本語テキストを生成
+
+画像 → OCR → 正規化（旧字体・仮名・誤読修正） → 口語体変換 を一括実行する。
 
 使い方:
     uv run python scripts/ocr_vision_llm.py input/画像.png
-    uv run python scripts/ocr_vision_llm.py input/画像.png --model qwen3-vl
     uv run python scripts/ocr_vision_llm.py input/画像.png -o results/
     uv run python scripts/ocr_vision_llm.py input/画像.png --no-save
 """
@@ -23,17 +24,18 @@ from utils.ollama_client import (
     OllamaModelNotFoundError,
     OllamaOCRClient,
 )
+from utils.text_normalizer import normalize_text
+from utils.text_modernizer import TextModernizer
 
 
 def parse_args() -> argparse.Namespace:
     """コマンドライン引数をパースする"""
     parser = argparse.ArgumentParser(
-        description="GLM-OCR による画像テキスト読み取り",
+        description="戦前日本語OCR — 画像から現代日本語テキストを生成",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用例:
   uv run python scripts/ocr_vision_llm.py input/画像.png
-  uv run python scripts/ocr_vision_llm.py input/画像.png --model qwen3-vl
   uv run python scripts/ocr_vision_llm.py input/画像.png -o results/
   uv run python scripts/ocr_vision_llm.py input/画像.png --no-save
         """,
@@ -49,7 +51,7 @@ def parse_args() -> argparse.Namespace:
         "-m",
         type=str,
         default=DEFAULT_MODEL,
-        help=f"使用するOllamaモデル名（デフォルト: {DEFAULT_MODEL}）",
+        help=f"OCR用モデル名（デフォルト: {DEFAULT_MODEL}）",
     )
     parser.add_argument(
         "--output",
@@ -74,42 +76,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def save_result(result, output_dir: Path) -> Path:
+def save_result(text: str, image_path: str, output_dir: Path) -> Path:
     """
-    OCR結果をテキストファイルとして保存する
+    最終結果をテキストファイルとして保存する
 
-    ファイル名: 元画像名_ocr.txt
+    ファイル名: 元画像名_modern.txt
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    image_stem = Path(result.image_path).stem
-    output_file = output_dir / f"{image_stem}_ocr.txt"
+    image_stem = Path(image_path).stem
+    output_file = output_dir / f"{image_stem}_modern.txt"
 
-    header = (
-        f"# OCR結果\n"
-        f"# 画像: {result.image_path}\n"
-        f"# モデル: {result.model}\n"
-        f"# プロンプト: {result.prompt}\n"
-        f"# 処理時間: {result.elapsed_seconds:.2f}秒\n"
-        f"# ---\n\n"
-    )
-
-    output_file.write_text(header + result.text, encoding="utf-8")
+    output_file.write_text(text, encoding="utf-8")
     return output_file
 
-
-def print_result(result) -> None:
-    """OCR結果をコンソールに見やすく表示する"""
-    print()
-    print("=" * 50)
-    print("GLM-OCR 認識結果")
-    print("=" * 50)
-    print(f"  画像: {result.image_path}")
-    print(f"  モデル: {result.model}")
-    print(f"  処理時間: {result.elapsed_seconds:.2f}秒")
-    print("-" * 50)
-    print(result.text)
-    print("-" * 50)
 
 
 def main() -> int:
@@ -118,17 +98,16 @@ def main() -> int:
 
     image_path = Path(args.image)
 
-    print(f"\n画像を読み取り中: {image_path}")
-    print(f"使用モデル: {args.model}")
+    # ── 1. OCR ──
+    print(f"\n[1/3] OCR実行中: {image_path}")
+    print(f"  モデル: {args.model}")
 
-    # クライアント作成
     client_kwargs = {"model": args.model}
     if args.prompt is not None:
         client_kwargs["prompt"] = args.prompt
 
     client = OllamaOCRClient(**client_kwargs)
 
-    # OCR実行
     try:
         result = client.ocr(image_path)
     except ImageFileError as e:
@@ -144,13 +123,32 @@ def main() -> int:
         print(f"\n✗ 予期しないエラー: {e}")
         return 1
 
-    # 結果表示
-    print_result(result)
+    print(f"  完了（{result.elapsed_seconds:.2f}秒）")
+    text = result.text
+
+    # ── 2. テキスト正規化 ──
+    print(f"\n[2/3] テキスト正規化中（旧字体・仮名・誤読修正）...")
+    text = normalize_text(text)
+    print(f"  完了")
+
+    # ── 3. 口語体変換 ──
+    print(f"\n[3/3] 口語体変換中（LLM: qwen3.5:9b）...")
+    modernizer = TextModernizer()
+    text = modernizer.modernize(text)
+    print(f"  完了")
+
+    # 最終結果を表示
+    print()
+    print("=" * 50)
+    print("変換結果")
+    print("=" * 50)
+    print(text)
+    print("-" * 50)
 
     # ファイル保存
     if not args.no_save:
-        output_path = save_result(result, Path(args.output))
-        print(f"\n✓ 結果を保存しました: {output_path}")
+        output_path = save_result(text, str(image_path), Path(args.output))
+        print(f"\n✓ 保存しました: {output_path}")
 
     return 0
 
