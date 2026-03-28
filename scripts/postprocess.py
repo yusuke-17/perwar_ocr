@@ -36,8 +36,7 @@ _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
 from utils.text_normalizer import normalize_text, find_normalizations
-from utils.kana_converter import find_historical_kana
-from utils.katakana_particle_converter import find_katakana_particles
+from senzen_word.kana import find_historical_kana, find_katakana_particles
 
 
 def postprocess(

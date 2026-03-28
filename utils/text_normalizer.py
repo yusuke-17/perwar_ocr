@@ -3,9 +3,9 @@
 
 OCR出力テキストに対して、以下の正規化を一括で行う:
   1. Unicode NFKC正規化（CJK互換漢字の統一）
-  2. 旧字体→新字体 + 異体字正規化（joyokanji）
+  2. 旧字体→新字体 + 異体字正規化（senzen_word）
   3. 半角→全角・カナ正規化（jaconv）
-  4. 歴史的仮名遣い→現代仮名遣い（kana_converter）
+  4. 歴史的仮名遣い→現代仮名遣い（senzen_word）
   5. OCR誤読修正（辞書ベース + 文脈依存パターン）
   6. 空白・句読点の正規化
 
@@ -23,10 +23,9 @@ import re
 import unicodedata
 
 import jaconv
-import joyokanji
 
-from utils.kana_converter import convert_historical_kana
-from utils.katakana_particle_converter import convert_katakana_particles
+from senzen_word.kanji import convert_old_kanji
+from senzen_word.kana import convert_historical_kana, convert_katakana_particles
 
 
 # ---------- OCR誤読 修正辞書 ----------
@@ -67,8 +66,8 @@ def _normalize_unicode(text: str) -> str:
 
 
 def _convert_old_kanji(text: str) -> str:
-    """旧字体→新字体 + 異体字の正規化（joyokanji）"""
-    return joyokanji.convert(text, variants=True)
+    """旧字体→新字体 + 異体字の正規化（senzen_word）"""
+    return convert_old_kanji(text)
 
 
 def _normalize_width(text: str) -> str:
@@ -142,7 +141,7 @@ def normalize_text(text: str) -> str:
 
     実行順序:
       1. Unicode NFKC正規化
-      2. 旧字体→新字体 + 異体字（joyokanji）
+      2. 旧字体→新字体 + 異体字（senzen_word）
       3. 半角→全角統一（jaconv）
       4. 歴史的仮名遣い→現代仮名遣い
       5. OCR誤読修正（辞書ベース + 文脈依存）
@@ -164,11 +163,11 @@ def normalize_text(text: str) -> str:
 
     # ① Unicode正規化
     body = _normalize_unicode(body)
-    # ② 旧字体→新字体
+    # ② 旧字体→新字体（senzen_word）
     body = _convert_old_kanji(body)
     # ③ 半角→全角
     body = _normalize_width(body)
-    # ④ 歴史的仮名遣い変換
+    # ④ 歴史的仮名遣い変換（senzen_word）
     body = convert_historical_kana(body)
     # ⑤ OCR誤読修正
     body = _correct_ocr_misreads(body)

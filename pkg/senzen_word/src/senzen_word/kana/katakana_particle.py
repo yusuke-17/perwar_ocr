@@ -7,18 +7,8 @@
 判定ルール:
   複合助詞（ニシテ, ヨリ 等）:
     - 前の文字がカタカナでない場合に変換
-    - 例: 劍法ニシテ → 劍法にして（ニの前が漢字 → 変換）
-    - 例: セラレタルニシテ → そのまま（ニの前がカタカナ → 変換しない）
-
   単一助詞（ノ, ハ 等）:
     - 前の文字がカタカナでない AND 後の文字がカタカナでない場合に変換
-    - 例: 島津氏ノ武術 → 島津氏の武術（前後とも漢字 → 変換）
-    - 例: 行ハレ → そのまま（後がカタカナ → 変換しない。LLMに委譲）
-
-使い方:
-    from utils.katakana_particle_converter import convert_katakana_particles
-
-    result = convert_katakana_particles(text)
 """
 
 import re
@@ -26,7 +16,6 @@ import re
 
 # ---------- 複合助詞パターン ----------
 # 長い順に定義（短い部分文字列で先にマッチしないように）
-# 前の文字がカタカナでない場合のみ変換する
 
 COMPOUND_PARTICLES: list[tuple[str, str]] = [
     # 3文字以上（先に処理）

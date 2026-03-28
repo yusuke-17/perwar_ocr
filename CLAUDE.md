@@ -8,7 +8,7 @@
 - Python 3.13+ / uv（パッケージ管理）
 - Ollama + GLM-OCR（メインOCRエンジン、0.9B）
 - Surya OCR（補助・比較用）
-- 後処理: joyokanji（旧字体変換）、jaconv（全角正規化）、仮名変換、LLMリライト（qwen3.5:9b）
+- 後処理: senzen_word（旧字体・仮名変換、自作PyPIパッケージ）、jaconv（全角正規化）、LLMリライト（qwen3.5:9b）
 
 ## よく使うコマンド
 ```bash
@@ -24,8 +24,9 @@ uv add <package>
 ```
 
 ## ディレクトリ構成
+- `pkg/senzen_word/` - 自作文字変換ライブラリ（PyPI公開用、独立パッケージ）
 - `scripts/` - 実行スクリプト（CLI）
-- `utils/` - ユーティリティモジュール（ライブラリ）
+- `utils/` - PJ固有ユーティリティ（Ollama, OCR, LLM等）
 - `input/` / `output/` - 入出力データ（Git管理外）
 - `models/` - モデルファイル（Git管理外）
 - `plan/` - 実装計画
@@ -46,4 +47,5 @@ uv add <package>
 - 既存パターンに従う: argparse CLI、dataclass、カスタム例外クラス
 - 日本語コメント・docstring
 - ファイルパスは `pathlib.Path` を使用
-- スクリプトは `scripts/`、モジュールは `utils/` に配置
+- スクリプトは `scripts/`、PJ固有モジュールは `utils/`、文字変換は `pkg/senzen_word/` に配置
+- senzen_word は外部依存ゼロ（Ollama, jaconv等に依存させない）

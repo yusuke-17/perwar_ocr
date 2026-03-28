@@ -6,11 +6,17 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "jaconv>=0.5.0",
-    "joyokanji>=1.1.0",
     "numpy>=2.4.2",
     "ollama>=0.6.1",
     "opencv-python-headless>=4.11.0.86",
     "pillow>=10.4.0",
     "requests>=2.32.5",
+    "senzen-word",
     "surya-ocr>=0.17.1",
 ]
+
+[tool.uv.sources]
+senzen-word = { workspace = true }
+
+[tool.uv.workspace]
+members = ["pkg/senzen_word"]
