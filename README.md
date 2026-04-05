@@ -48,7 +48,10 @@ uv run python scripts/setup_check.py
 ## 使い方
 
 ```bash
-# 画像 → OCR → 正規化 → 口語体変換（すべて自動実行）
+# 対話モード（input/ の画像を一覧から選択して実行）
+uv run prewar-ocr
+
+# 画像を直接指定して実行
 uv run prewar-ocr input/画像.png
 
 # → output/画像_modern.txt が生成される

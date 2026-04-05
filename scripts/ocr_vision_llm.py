@@ -4,14 +4,17 @@
 画像 → OCR → 正規化（旧字体・仮名・誤読修正） → 口語体変換 を一括実行する。
 
 使い方:
-    uv run python scripts/ocr_vision_llm.py input/画像.png
-    uv run python scripts/ocr_vision_llm.py input/画像.png -o results/
-    uv run python scripts/ocr_vision_llm.py input/画像.png --no-save
+    uv run prewar-ocr                          # 対話モード（input/から画像を選択）
+    uv run prewar-ocr input/画像.png            # 直接指定
+    uv run prewar-ocr input/画像.png -o results/
+    uv run prewar-ocr input/画像.png --no-save
 """
 
 import argparse
 import sys
 from pathlib import Path
+
+import questionary
 
 from utils.ollama_client import (
     DEFAULT_MODEL,
@@ -40,7 +43,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "image",
         type=str,
-        help="OCR対象の画像ファイルパス",
+        nargs="?",
+        default=None,
+        help="OCR対象の画像ファイルパス（省略時は対話モード）",
     )
     parser.add_argument(
         "--model",
@@ -72,6 +77,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
+INPUT_DIR = Path("input")
+
+
+def select_image_interactive() -> Path | None:
+    """input/ディレクトリから画像を対話的に選択する"""
+    if not INPUT_DIR.exists():
+        print(f"✗ {INPUT_DIR}/ ディレクトリが見つかりません")
+        return None
+
+    images = sorted(
+        [f for f in INPUT_DIR.iterdir() if f.suffix.lower() in IMAGE_EXTENSIONS]
+    )
+
+    if not images:
+        print(f"✗ {INPUT_DIR}/ に画像ファイルがありません")
+        return None
+
+    choices = [f.name for f in images]
+    selected = questionary.select(
+        "処理する画像を選択してください:",
+        choices=choices,
+    ).ask()
+
+    if selected is None:
+        # Ctrl+C でキャンセルされた場合
+        return None
+
+    return INPUT_DIR / selected
+
+
 def save_result(text: str, image_path: str, output_dir: Path) -> Path:
     """
     最終結果をテキストファイルとして保存する
@@ -92,7 +128,14 @@ def main() -> int:
     """メインエントリポイント"""
     args = parse_args()
 
-    image_path = Path(args.image)
+    # 引数なし → 対話モードで画像を選択
+    if args.image is None:
+        selected = select_image_interactive()
+        if selected is None:
+            return 1
+        image_path = selected
+    else:
+        image_path = Path(args.image)
 
     # ── 1. OCR ──
     print(f"\n[1/3] OCR実行中: {image_path}")
