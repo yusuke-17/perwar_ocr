@@ -49,7 +49,7 @@ uv run python scripts/setup_check.py
 
 ```bash
 # 画像 → OCR → 正規化 → 口語体変換（すべて自動実行）
-uv run python scripts/ocr_vision_llm.py input/画像.png
+uv run prewar-ocr input/画像.png
 
 # → output/画像_modern.txt が生成される
 ```
@@ -58,13 +58,13 @@ uv run python scripts/ocr_vision_llm.py input/画像.png
 
 ```bash
 # 出力先を指定
-uv run python scripts/ocr_vision_llm.py input/画像.png -o results/
+uv run prewar-ocr input/画像.png -o results/
 
 # ファイル保存せずコンソール出力のみ
-uv run python scripts/ocr_vision_llm.py input/画像.png --no-save
+uv run prewar-ocr input/画像.png --no-save
 
 # OCR用モデルを変更
-uv run python scripts/ocr_vision_llm.py input/画像.png -m qwen3-vl
+uv run prewar-ocr input/画像.png -m qwen3-vl
 ```
 
 ## フォルダ構成
