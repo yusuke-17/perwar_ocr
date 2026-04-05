@@ -28,7 +28,6 @@ uv add <package>
 - `scripts/` - 実行スクリプト（CLI）
 - `utils/` - PJ固有ユーティリティ（Ollama, OCR, LLM等）
 - `input/` / `output/` - 入出力データ（Git管理外）
-- `models/` - モデルファイル（Git管理外）
 - `plan/` - 実装計画
 - `survey/` - 調査レポート
 
