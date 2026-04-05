@@ -122,10 +122,24 @@ def main() -> int:
     print(f"  完了（{result.elapsed_seconds:.2f}秒）")
     text = result.text
 
+    print()
+    print("=" * 50)
+    print("OCR結果")
+    print("=" * 50)
+    print(text)
+    print("-" * 50)
+
     # ── 2. テキスト正規化 ──
     print(f"\n[2/3] テキスト正規化中（旧字体・仮名・誤読修正）...")
     text = normalize_text(text)
     print(f"  完了")
+
+    print()
+    print("=" * 50)
+    print("正規化結果")
+    print("=" * 50)
+    print(text)
+    print("-" * 50)
 
     # ── 3. 口語体変換 ──
     print(f"\n[3/3] 口語体変換中（LLM: qwen3.5:9b）...")
