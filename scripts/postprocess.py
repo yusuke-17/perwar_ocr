@@ -31,10 +31,6 @@ import argparse
 import sys
 from pathlib import Path
 
-# プロジェクトルートを sys.path に追加
-_project_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_project_root))
-
 from utils.text_normalizer import normalize_text, find_normalizations
 from senzen_word.kana import find_historical_kana, find_katakana_particles
 
