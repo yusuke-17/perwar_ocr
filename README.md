@@ -53,15 +53,31 @@ uv run prewar-ocr
 
 # 画像を直接指定して実行
 uv run prewar-ocr input/画像.png
-
-# → output/画像_modern.txt が生成される
 ```
 
-出力先やモデルの変更も可能:
+実行すると `library/{YYYY-MM-DD}_{画像名}/` フォルダが作られ、1回の処理結果が「1件の記録」として保存される。
+
+### 出力フォーマット
+
+```
+library/
+└── 2026-05-24_画像名/
+    ├── source.png       元画像のコピー（複数枚なら source_01.png, source_02.png ...）
+    ├── ocr_raw.txt      OCR生テキスト（正規化前）
+    ├── modern.txt       現代語テキスト（最終成果物）
+    └── meta.json        処理メタ情報（モデル・設定・処理時間）
+```
+
+`meta.json` には使用モデル・正規化設定・処理時間などが記録され、後から検索・再実行・修正の素材として使える。
+
+### オプション
 
 ```bash
-# 出力先を指定
-uv run prewar-ocr input/画像.png -o results/
+# 旧形式（output/{画像名}_modern.txt）も併せて出力
+uv run prewar-ocr input/画像.png --legacy-output
+
+# ライブラリのルートディレクトリを変更
+uv run prewar-ocr input/画像.png --library-root mylib/
 
 # ファイル保存せずコンソール出力のみ
 uv run prewar-ocr input/画像.png --no-save
@@ -75,8 +91,10 @@ uv run prewar-ocr input/画像.png -m qwen3-vl
 | フォルダ | 用途 |
 |----------|------|
 | `input/` | OCR対象の画像ファイルを置く |
-| `output/` | OCR結果のテキストが出力される |
-| `scripts/` | OCR実行・後処理などのスクリプト |
-| `utils/` | 旧字体辞書・仮名変換などのユーティリティ |
+| `library/` | 処理結果の蓄積先（1文書＝1フォルダ） |
+| `output/` | `--legacy-output` 指定時の旧形式出力先 |
+| `scripts/` | OCR実行スクリプト |
+| `utils/` | OCR・正規化・口語体変換・ライブラリ保存などのユーティリティ |
+| `pkg/senzen_word/` | 旧字体・仮名変換ライブラリ（自作PyPIパッケージ） |
 | `plan/` | 実装計画 |
 | `survey/` | 調査レポート |

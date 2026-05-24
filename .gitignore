@@ -25,6 +25,8 @@ input/*
 !input/.gitkeep
 output/*
 !output/.gitkeep
+library/*
+!library/.gitkeep
 
 # IDE
 .vscode/
