@@ -22,6 +22,7 @@ dependencies = [
 
 [project.scripts]
 prewar-ocr = "scripts.ocr_vision_llm:main"
+prewar-library = "scripts.library:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["scripts", "utils"]

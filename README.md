@@ -73,6 +73,12 @@ library/
 ### オプション
 
 ```bash
+# 正規化（旧字体・仮名・誤読修正）をスキップ
+uv run prewar-ocr input/画像.png --no-normalize
+
+# 口語体変換（LLMリライト）をスキップ
+uv run prewar-ocr input/画像.png --no-modernize
+
 # 旧形式（output/{画像名}_modern.txt）も併せて出力
 uv run prewar-ocr input/画像.png --legacy-output
 
@@ -85,6 +91,48 @@ uv run prewar-ocr input/画像.png --no-save
 # OCR用モデルを変更
 uv run prewar-ocr input/画像.png -m qwen3-vl
 ```
+
+## ライブラリ検索
+
+`library/` に溜まった文書を全文検索する。SQLite FTS5 + trigram tokenizer を使うため日本語の部分一致が効き、追加パッケージは不要（Python標準ライブラリのみ）。
+
+### 検索インデックスの構築
+
+```bash
+# 差分更新（meta.json の mtime を見て変更分だけ更新）
+uv run prewar-library index
+
+# 全件再構築（インデックス破損時など）
+uv run prewar-library index --rebuild
+```
+
+### キーワード検索
+
+```bash
+# 単一語
+uv run prewar-library find 関東大震災
+
+# 複数語スペース区切り = AND（両方を含む文書のみヒット）
+uv run prewar-library find 関東大震災 警察報告
+
+# 表示件数を変更（デフォルト20件）
+uv run prewar-library find 関東大震災 --limit 50
+
+# JSON 出力（パイプ処理用）
+uv run prewar-library find 関東大震災 --format json
+```
+
+検索対象は `modern.txt` と `meta.json` の `title` のみ。`ocr_raw.txt`（旧字体の生テキスト）はインデックス外。
+
+> ⚠️ trigram の仕様上、検索語は **3文字以上**が必要（2文字以下は警告して中断）。
+
+### ライブラリ統計
+
+```bash
+uv run prewar-library stat
+```
+
+文書数・インデックスサイズ・最終更新日が表示される。
 
 ## フォルダ構成
 
