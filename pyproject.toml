@@ -21,6 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
+prewar = "scripts.cli:main"
 prewar-ocr = "scripts.ocr_vision_llm:main"
 prewar-library = "scripts.library:main"
 

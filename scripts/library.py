@@ -28,6 +28,62 @@ from utils.library_search import (
 )
 
 
+def add_library_root_argument(parser: argparse.ArgumentParser) -> None:
+    """--library-root オプションを追加する（統合CLIの各サブコマンドで流用）"""
+    parser.add_argument(
+        "--library-root",
+        type=str,
+        default="library",
+        help="ライブラリのルートディレクトリ（デフォルト: library/）",
+    )
+
+
+def add_index_arguments(parser: argparse.ArgumentParser) -> None:
+    """index サブコマンドの引数を追加する"""
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="既存インデックスを削除して全件再構築",
+    )
+
+
+def add_find_arguments(parser: argparse.ArgumentParser) -> None:
+    """find サブコマンドの引数を追加する"""
+    parser.add_argument(
+        "query",
+        type=str,
+        nargs="+",
+        help="検索語（スペース区切りで複数指定するとAND検索）",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="表示件数の上限（デフォルト: 20）",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="出力形式（デフォルト: text）",
+    )
+
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    """library 全体の引数（共通オプション + index/find/stat サブコマンド）を追加する"""
+    add_library_root_argument(parser)
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    p_index = subparsers.add_parser("index", help="検索インデックスを更新")
+    add_index_arguments(p_index)
+
+    p_find = subparsers.add_parser("find", help="ライブラリを全文検索")
+    add_find_arguments(p_find)
+
+    subparsers.add_parser("stat", help="ライブラリの統計情報を表示")
+
+
 def parse_args() -> argparse.Namespace:
     """コマンドライン引数をパースする"""
     parser = argparse.ArgumentParser(
@@ -44,48 +100,7 @@ def parse_args() -> argparse.Namespace:
   uv run prewar-library stat                  # 統計情報
         """,
     )
-
-    parser.add_argument(
-        "--library-root",
-        type=str,
-        default="library",
-        help="ライブラリのルートディレクトリ（デフォルト: library/）",
-    )
-
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    # index
-    p_index = subparsers.add_parser("index", help="検索インデックスを更新")
-    p_index.add_argument(
-        "--rebuild",
-        action="store_true",
-        help="既存インデックスを削除して全件再構築",
-    )
-
-    # find
-    p_find = subparsers.add_parser("find", help="ライブラリを全文検索")
-    p_find.add_argument(
-        "query",
-        type=str,
-        nargs="+",
-        help="検索語（スペース区切りで複数指定するとAND検索）",
-    )
-    p_find.add_argument(
-        "--limit",
-        type=int,
-        default=20,
-        help="表示件数の上限（デフォルト: 20）",
-    )
-    p_find.add_argument(
-        "--format",
-        choices=["text", "json"],
-        default="text",
-        help="出力形式（デフォルト: text）",
-    )
-
-    # stat
-    subparsers.add_parser("stat", help="ライブラリの統計情報を表示")
-
+    add_arguments(parser)
     return parser.parse_args()
 
 
@@ -203,8 +218,8 @@ def _hit_to_dict(hit: SearchHit) -> dict:
 # ---------- エントリポイント ----------
 
 
-def main() -> int:
-    args = parse_args()
+def run(args: argparse.Namespace) -> int:
+    """パース済み引数を受け取り、対応するサブコマンドを実行する"""
     if args.command == "index":
         return cmd_index(args)
     if args.command == "find":
@@ -212,6 +227,10 @@ def main() -> int:
     if args.command == "stat":
         return cmd_stat(args)
     return 1
+
+
+def main() -> int:
+    return run(parse_args())
 
 
 if __name__ == "__main__":

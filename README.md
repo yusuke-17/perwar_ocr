@@ -42,18 +42,39 @@ uv sync
 ### 4. セットアップ確認
 
 ```bash
-uv run python scripts/setup_check.py
+uv run prewar check
 ```
 
 ## 使い方
 
-```bash
-# 対話モード（input/ の画像を一覧から選択して実行）
-uv run prewar-ocr
+すべての機能は `prewar` コマンド1つに集約されている。**コマンドを覚えていなくても、引数なしで実行すれば対話メニューが出る**ので、矢印キーで選ぶだけでよい。
 
-# 画像を直接指定して実行
-uv run prewar-ocr input/画像.png
+```bash
+# 対話メニュー（OCR / 撮りため / 検索 / 口語体変換 / 環境確認 を矢印キーで選択）
+uv run prewar
 ```
+
+慣れたらサブコマンドで直接実行もできる（速い）。
+
+| やりたいこと | コマンド |
+|------------|---------|
+| 画像をOCR→現代語化 | `uv run prewar ocr input/画像.png` |
+| 範囲スクショで撮りため | `uv run prewar shoot` |
+| ライブラリを全文検索 | `uv run prewar search 関東大震災` |
+| 検索インデックス更新 | `uv run prewar index` |
+| ライブラリ統計 | `uv run prewar stat` |
+| テキスト後処理（正規化/口語体化） | `uv run prewar fix output/x.txt` |
+| 環境確認 | `uv run prewar check` |
+
+```bash
+# OCR: 対話モード（input/ の画像を一覧から選択して実行）
+uv run prewar ocr
+
+# OCR: 画像を直接指定して実行
+uv run prewar ocr input/画像.png
+```
+
+> 旧コマンド `uv run prewar-ocr` / `uv run prewar-library` も後方互換でそのまま使える。
 
 実行すると `library/{YYYY-MM-DD}_{画像名}/` フォルダが作られ、1回の処理結果が「1件の記録」として保存される。
 
@@ -63,16 +84,16 @@ uv run prewar-ocr input/画像.png
 
 ```bash
 # 範囲スクショを繰り返し撮影 → 終了時にそのまま一括処理
-uv run prewar-ocr shoot
+uv run prewar shoot
 
 # 撮るだけ（処理は後回し）
-uv run prewar-ocr shoot --no-run
+uv run prewar shoot --no-run
 
 # 貯めたセッションフォルダを後からまとめて処理（1記録として保存）
-uv run prewar-ocr input/session_2026-05-31_103000/
+uv run prewar ocr input/session_2026-05-31_103000/
 
 # フォルダ内を画像ごとの別記録として処理
-uv run prewar-ocr input/session_2026-05-31_103000/ --separate
+uv run prewar ocr input/session_2026-05-31_103000/ --separate
 ```
 
 - 撮った画像は一時置き場 `input/session_{日時}/p001.png, p002.png ...` に撮った順（＝ページ順）で貯まる。
@@ -97,28 +118,28 @@ library/
 
 ```bash
 # 正規化（旧字体・仮名・誤読修正）をスキップ
-uv run prewar-ocr input/画像.png --no-normalize
+uv run prewar ocr input/画像.png --no-normalize
 
 # 口語体変換（LLMリライト）をスキップ
-uv run prewar-ocr input/画像.png --no-modernize
+uv run prewar ocr input/画像.png --no-modernize
 
 # 旧形式（output/{画像名}_modern.txt）も併せて出力
-uv run prewar-ocr input/画像.png --legacy-output
+uv run prewar ocr input/画像.png --legacy-output
 
 # ライブラリのルートディレクトリを変更
-uv run prewar-ocr input/画像.png --library-root mylib/
+uv run prewar ocr input/画像.png --library-root mylib/
 
 # ファイル保存せずコンソール出力のみ
-uv run prewar-ocr input/画像.png --no-save
+uv run prewar ocr input/画像.png --no-save
 
 # OCR用モデルを変更
-uv run prewar-ocr input/画像.png -m qwen3-vl
+uv run prewar ocr input/画像.png -m qwen3-vl
 
 # 撮影のみ行い処理は後回し（shoot と併用）
-uv run prewar-ocr shoot --no-run
+uv run prewar shoot --no-run
 
 # フォルダ内を画像ごとの別記録として処理
-uv run prewar-ocr input/session_.../ --separate
+uv run prewar ocr input/session_.../ --separate
 ```
 
 ## ライブラリ検索
@@ -129,26 +150,26 @@ uv run prewar-ocr input/session_.../ --separate
 
 ```bash
 # 差分更新（meta.json の mtime を見て変更分だけ更新）
-uv run prewar-library index
+uv run prewar index
 
 # 全件再構築（インデックス破損時など）
-uv run prewar-library index --rebuild
+uv run prewar index --rebuild
 ```
 
 ### キーワード検索
 
 ```bash
 # 単一語
-uv run prewar-library find 関東大震災
+uv run prewar search 関東大震災
 
 # 複数語スペース区切り = AND（両方を含む文書のみヒット）
-uv run prewar-library find 関東大震災 警察報告
+uv run prewar search 関東大震災 警察報告
 
 # 表示件数を変更（デフォルト20件）
-uv run prewar-library find 関東大震災 --limit 50
+uv run prewar search 関東大震災 --limit 50
 
 # JSON 出力（パイプ処理用）
-uv run prewar-library find 関東大震災 --format json
+uv run prewar search 関東大震災 --format json
 ```
 
 検索対象は `modern.txt` と `meta.json` の `title` のみ。`ocr_raw.txt`（旧字体の生テキスト）はインデックス外。
@@ -158,7 +179,7 @@ uv run prewar-library find 関東大震災 --format json
 ### ライブラリ統計
 
 ```bash
-uv run prewar-library stat
+uv run prewar stat
 ```
 
 文書数・インデックスサイズ・最終更新日が表示される。

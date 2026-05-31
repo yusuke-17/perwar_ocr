@@ -11,12 +11,26 @@
 - 後処理: senzen_word（旧字体・仮名変換、自作PyPIパッケージ）、jaconv（全角正規化）、LLMリライト（qwen3.5:9b）
 
 ## よく使うコマンド
+すべての機能は統合CLI `prewar`（`scripts/cli.py`）に集約。引数なしで対話メニュー、
+サブコマンドで直接実行も可。旧 `prewar-ocr` / `prewar-library` は後方互換で残存。
+
 ```bash
+# 対話メニュー（OCR / 撮りため / 検索 / 口語体変換 / 環境確認）
+uv run prewar
+
 # 画像 → OCR → 正規化 → 口語体変換（一括実行）
-uv run python scripts/ocr_vision_llm.py input/画像.png
+uv run prewar ocr input/画像.png
+
+# ライブラリ全文検索 / インデックス更新 / 統計
+uv run prewar search 関東大震災
+uv run prewar index
+uv run prewar stat
+
+# テキスト後処理（正規化/口語体化）
+uv run prewar fix output/x.txt
 
 # 環境確認
-uv run python scripts/setup_check.py
+uv run prewar check
 
 # 依存パッケージ同期・追加
 uv sync

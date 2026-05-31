@@ -108,19 +108,8 @@ def process_file(
     print(f"  保存先: {output_path}")
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="OCR出力テキストを現代日本語に変換する",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-使用例:
-  uv run python scripts/postprocess.py output/sample_ocr.txt
-  uv run python scripts/postprocess.py output/ -o output_converted/
-  uv run python scripts/postprocess.py output/sample_ocr.txt --diff
-  uv run python scripts/postprocess.py output/sample_ocr.txt --modernize
-        """,
-    )
-
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    """後処理コマンドの引数を追加する（統合CLIの fix サブコマンドで流用）"""
     parser.add_argument(
         "input",
         type=str,
@@ -154,12 +143,24 @@ def parse_args() -> argparse.Namespace:
         help="リライトに使用するLLMモデル名（デフォルト: qwen3.5:9b）",
     )
 
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="OCR出力テキストを現代日本語に変換する",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用例:
+  uv run python scripts/postprocess.py output/sample_ocr.txt
+  uv run python scripts/postprocess.py output/ -o output_converted/
+  uv run python scripts/postprocess.py output/sample_ocr.txt --diff
+  uv run python scripts/postprocess.py output/sample_ocr.txt --modernize
+        """,
+    )
+    add_arguments(parser)
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-
+def run(args: argparse.Namespace) -> int:
     input_path = Path(args.input)
     normalize = not args.no_normalize
 
@@ -207,6 +208,10 @@ def main() -> int:
 
     print("\n完了!")
     return 0
+
+
+def main() -> int:
+    return run(parse_args())
 
 
 if __name__ == "__main__":

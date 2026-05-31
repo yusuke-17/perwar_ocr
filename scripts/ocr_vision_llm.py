@@ -45,21 +45,8 @@ from utils.text_modernizer import TextModernizer
 from utils import screen_capture
 
 
-def parse_args() -> argparse.Namespace:
-    """コマンドライン引数をパースする"""
-    parser = argparse.ArgumentParser(
-        description="戦前日本語OCR — 画像から現代日本語テキストを生成",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-使用例:
-  uv run python scripts/ocr_vision_llm.py input/画像.png
-  uv run python scripts/ocr_vision_llm.py input/画像.png --no-modernize
-  uv run python scripts/ocr_vision_llm.py input/画像.png --legacy-output
-  uv run python scripts/ocr_vision_llm.py input/画像.png --library-root mylib/
-  uv run python scripts/ocr_vision_llm.py input/画像.png --no-save
-        """,
-    )
-
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    """OCRコマンドの引数を追加する（統合CLIの ocr / shoot サブコマンドで流用）"""
     parser.add_argument(
         "image",
         type=str,
@@ -129,6 +116,22 @@ def parse_args() -> argparse.Namespace:
         help="フォルダ/セッションを画像ごとの別記録として処理（既定は結合して1記録）",
     )
 
+
+def parse_args() -> argparse.Namespace:
+    """コマンドライン引数をパースする"""
+    parser = argparse.ArgumentParser(
+        description="戦前日本語OCR — 画像から現代日本語テキストを生成",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用例:
+  uv run python scripts/ocr_vision_llm.py input/画像.png
+  uv run python scripts/ocr_vision_llm.py input/画像.png --no-modernize
+  uv run python scripts/ocr_vision_llm.py input/画像.png --legacy-output
+  uv run python scripts/ocr_vision_llm.py input/画像.png --library-root mylib/
+  uv run python scripts/ocr_vision_llm.py input/画像.png --no-save
+        """,
+    )
+    add_arguments(parser)
     return parser.parse_args()
 
 
@@ -522,10 +525,8 @@ def cmd_shoot(args: argparse.Namespace) -> int:
     return process_folder(args, session_dir)
 
 
-def main() -> int:
-    """メインエントリポイント"""
-    args = parse_args()
-
+def run(args: argparse.Namespace) -> int:
+    """パース済み引数を受け取り、OCR処理を実行する"""
     # 'shoot' → 範囲スクショ撮りためモード
     if args.image == "shoot":
         return cmd_shoot(args)
@@ -552,6 +553,11 @@ def main() -> int:
         if selected is None:
             return 1
         return process_batch(args, selected)
+
+
+def main() -> int:
+    """メインエントリポイント"""
+    return run(parse_args())
 
 
 if __name__ == "__main__":

@@ -159,5 +159,10 @@ def main():
     return 0 if all_ok else 1
 
 
+def run(args=None) -> int:
+    """統合CLI（prewar check）用アダプタ。引数は受け取るが使用しない。"""
+    return main()
+
+
 if __name__ == "__main__":
     sys.exit(main())
