@@ -10,6 +10,10 @@
 使い方:
     uv run prewar-ocr                                # 対話モード（input/から画像を選択）
     uv run prewar-ocr input/画像.png                  # 直接指定（1枚）
+    uv run prewar-ocr shoot                          # 範囲スクショを撮りため → 終了時に一括処理（macOS）
+    uv run prewar-ocr shoot --no-run                 # 撮るだけ（処理は後回し）
+    uv run prewar-ocr input/session_.../             # 貯めたフォルダを1記録として一括処理
+    uv run prewar-ocr input/session_.../ --separate  # フォルダ内を画像ごとの別記録として処理
     uv run prewar-ocr input/画像.png --no-modernize   # 口語体変換をスキップ
     uv run prewar-ocr input/画像.png --legacy-output  # 旧 output/*_modern.txt も併存
     uv run prewar-ocr input/画像.png --no-save        # 保存をスキップ（コンソール出力のみ）
@@ -38,6 +42,7 @@ from utils.ollama_client import (
 )
 from utils.text_normalizer import normalize_text
 from utils.text_modernizer import TextModernizer
+from utils import screen_capture
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,7 +65,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         nargs="?",
         default=None,
-        help="OCR対象の画像ファイルパス（省略時は対話モード）",
+        help=(
+            "OCR対象（画像ファイル / フォルダ / 'shoot'）。"
+            "省略時は対話モード、shoot は範囲スクショ撮影、"
+            "フォルダ指定はその中の画像を一括処理"
+        ),
     )
     parser.add_argument(
         "--model",
@@ -108,6 +117,16 @@ def parse_args() -> argparse.Namespace:
         "--no-save",
         action="store_true",
         help="ファイル保存をスキップ（コンソール出力のみ）",
+    )
+    parser.add_argument(
+        "--no-run",
+        action="store_true",
+        help="shoot 時に撮影のみ行い、OCR処理は後回しにする",
+    )
+    parser.add_argument(
+        "--separate",
+        action="store_true",
+        help="フォルダ/セッションを画像ごとの別記録として処理（既定は結合して1記録）",
     )
 
     return parser.parse_args()
@@ -436,13 +455,87 @@ def process_batch(args: argparse.Namespace, image_paths: list[Path]) -> int:
     return 0
 
 
+def load_folder_images(folder: Path) -> list[Path] | None:
+    """フォルダ内の画像をファイル名順（＝ページ順）に並べて返す
+
+    pNNN（ゼロ埋め）連番なら sorted() で読む順が保たれる。
+    画像が1枚もなければ警告して None を返す。
+    """
+    images = sorted(
+        [f for f in folder.iterdir() if f.suffix.lower() in IMAGE_EXTENSIONS]
+    )
+    if not images:
+        print(f"✗ {folder}/ に画像ファイルがありません")
+        return None
+    return images
+
+
+def process_folder(args: argparse.Namespace, folder: Path) -> int:
+    """フォルダ（撮影セッション等）内の画像を一括処理する
+
+    既定は結合して1記録（process_batch）。--separate 指定時は
+    画像ごとに別記録（process_single）として処理する。
+    """
+    images = load_folder_images(folder)
+    if images is None:
+        return 1
+
+    if args.separate:
+        print(f"\n処理モード: 画像ごとに別記録（{len(images)}件）")
+        for i, image in enumerate(images, start=1):
+            print(f"\n===== {i}/{len(images)}: {image.name} =====")
+            code = process_single(args, image)
+            if code != 0:
+                return code
+        return 0
+
+    return process_batch(args, images)
+
+
+def cmd_shoot(args: argparse.Namespace) -> int:
+    """範囲スクショを撮りため、終了時に一括処理する（macOS専用）"""
+    if not screen_capture.is_supported():
+        print("✗ 範囲スクショ撮影（shoot）は macOS 専用です。")
+        print(
+            "  他OSでは、画像を input/ に置いてから "
+            "`uv run prewar-ocr <画像 or フォルダ>` で処理してください。"
+        )
+        return 1
+
+    try:
+        images = screen_capture.shoot_session(INPUT_DIR)
+    except screen_capture.ScreenCaptureError as e:
+        print(f"✗ 撮影エラー: {e}")
+        return 1
+
+    if images is None:
+        # 1枚も撮らずに終了
+        return 0
+
+    session_dir = images[0].parent
+
+    if args.no_run:
+        print(f"\n撮影のみ完了しました（--no-run）。後で処理するには:")
+        print(f"  uv run prewar-ocr {session_dir}/")
+        return 0
+
+    return process_folder(args, session_dir)
+
+
 def main() -> int:
     """メインエントリポイント"""
     args = parse_args()
 
-    # 引数あり → 単一画像を直接処理
+    # 'shoot' → 範囲スクショ撮りためモード
+    if args.image == "shoot":
+        return cmd_shoot(args)
+
+    # 引数あり → ファイル or フォルダ
     if args.image is not None:
-        return process_single(args, Path(args.image))
+        target = Path(args.image)
+        if target.is_dir():
+            return process_folder(args, target)
+        return process_single(args, target)
 
     # 引数なし → 対話モード
     mode = select_mode_interactive()

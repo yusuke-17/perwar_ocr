@@ -57,6 +57,29 @@ uv run prewar-ocr input/画像.png
 
 実行すると `library/{YYYY-MM-DD}_{画像名}/` フォルダが作られ、1回の処理結果が「1件の記録」として保存される。
 
+### 範囲スクショで撮りため → 一括処理（macOS）
+
+ブラウザ上の資料を範囲スクショで取り込む場合は `shoot` を使う。macOS標準の範囲選択（`screencapture -i`）で本文だけをドラッグして囲うため、ブラウザのUIや周辺本文がOCR対象に写り込まない。複数ページを撮りためてから最後にまとめて処理できる。
+
+```bash
+# 範囲スクショを繰り返し撮影 → 終了時にそのまま一括処理
+uv run prewar-ocr shoot
+
+# 撮るだけ（処理は後回し）
+uv run prewar-ocr shoot --no-run
+
+# 貯めたセッションフォルダを後からまとめて処理（1記録として保存）
+uv run prewar-ocr input/session_2026-05-31_103000/
+
+# フォルダ内を画像ごとの別記録として処理
+uv run prewar-ocr input/session_2026-05-31_103000/ --separate
+```
+
+- 撮った画像は一時置き場 `input/session_{日時}/p001.png, p002.png ...` に撮った順（＝ページ順）で貯まる。
+- 既定では1セッションを結合して「1件の長い文書」として保存する（同一資料の複数ページ撮影向け）。`--separate` で画像ごとの別記録に切り替えられる。
+- セッションフォルダは処理後も残る（`library/` にコピー保存済み。撮り直し用に手元に残す。不要なら手動で削除）。
+- `shoot` は macOS 専用。他OSでは画像を `input/` に置いてフォルダ/パス指定で処理する。
+
 ### 出力フォーマット
 
 ```
@@ -90,6 +113,12 @@ uv run prewar-ocr input/画像.png --no-save
 
 # OCR用モデルを変更
 uv run prewar-ocr input/画像.png -m qwen3-vl
+
+# 撮影のみ行い処理は後回し（shoot と併用）
+uv run prewar-ocr shoot --no-run
+
+# フォルダ内を画像ごとの別記録として処理
+uv run prewar-ocr input/session_.../ --separate
 ```
 
 ## ライブラリ検索
