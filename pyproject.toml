@@ -25,6 +25,9 @@ prewar = "scripts.cli:main"
 prewar-ocr = "scripts.ocr_vision_llm:main"
 prewar-library = "scripts.library:main"
 
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["scripts", "utils"]
 

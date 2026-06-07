@@ -21,6 +21,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from utils.text_normalizer import normalize_query
+
 # ---------- 定数 ----------
 
 INDEX_DIR_NAME = ".index"
@@ -289,13 +291,19 @@ class LibraryIndex:
         """スペース区切りクエリを FTS5 の AND 構文に変換
 
         - 半角/全角スペースで分割
-        - 各語が TRIGRAM_MIN_QUERY_CHARS 未満なら QueryTooShortError
+        - 各語を normalize_query() で照合用に正規化（旧字体・仮名遣い等を
+          インデックス側 modern.txt と揃える）
+        - 正規化「後」の文字数が TRIGRAM_MIN_QUERY_CHARS 未満なら
+          QueryTooShortError（拗音縮約で字数が縮むため長さ判定は正規化の後）
         - ダブルクォートで囲んで AND 連結（特殊文字を無害化）
         """
         # 半角/全角スペース両方で分割
-        terms = [t for t in query.replace("　", " ").split(" ") if t]
-        if not terms:
+        raw_terms = [t for t in query.replace("　", " ").split(" ") if t]
+        if not raw_terms:
             raise QueryTooShortError("検索語が空です")
+
+        # 各語を照合用に正規化（インデックス側と字体・仮名遣いを揃える）
+        terms = [normalize_query(t) for t in raw_terms]
 
         for term in terms:
             if len(term) < TRIGRAM_MIN_QUERY_CHARS:

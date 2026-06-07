@@ -183,6 +183,33 @@ def normalize_text(text: str) -> str:
     return body
 
 
+def normalize_query(text: str) -> str:
+    """検索クエリを照合用に正規化する（normalize_text の照合サブセット）
+
+    インデックス側 modern.txt と字体・仮名遣いを揃えるための最小変換のみを行う。
+    OCR誤読辞書・句読点/空白整形は検索語を歪めるため、ここでは適用しない。
+
+    適用順序:
+      ① Unicode NFKC正規化
+      ② 旧字体→新字体 + 異体字（senzen_word）
+      ③ 半角→全角統一（jaconv）
+      ④ 歴史的仮名遣い→現代仮名遣い（senzen_word）
+      ⑤ カタカナ助詞→ひらがな（senzen_word）
+
+    Args:
+        text: 正規化対象の検索語
+
+    Returns:
+        正規化された検索語
+    """
+    text = _normalize_unicode(text)          # ① NFKC
+    text = _convert_old_kanji(text)          # ② 旧字体→新字体
+    text = _normalize_width(text)            # ③ 半角→全角
+    text = convert_historical_kana(text)     # ④ 歴史的仮名遣い
+    text = convert_katakana_particles(text)  # ⑤ カタカナ助詞→ひらがな
+    return text
+
+
 def find_normalizations(text: str) -> list[tuple[str, str, int]]:
     """
     テキスト中の正規化対象箇所を検出する（統計・デバッグ用）
