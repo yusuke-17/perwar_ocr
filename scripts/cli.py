@@ -14,6 +14,7 @@
     uv run prewar index --rebuild       # 検索インデックス再構築
     uv run prewar stat                 # ライブラリ統計
     uv run prewar fix output/x.txt      # テキスト後処理（正規化/口語体化）
+    uv run prewar diff <doc_id>        # 変換前後の差分を色付き表示
     uv run prewar check                # 環境チェック
 
 各機能の中身は既存スクリプト（ocr_vision_llm / library / postprocess /
@@ -26,7 +27,7 @@ import sys
 
 import questionary
 
-from scripts import library, ocr_vision_llm, postprocess, setup_check
+from scripts import diff_viewer, library, ocr_vision_llm, postprocess, setup_check
 from utils.config import CONFIG
 
 
@@ -70,6 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
   uv run prewar index --rebuild       # 検索インデックス再構築
   uv run prewar stat                 # ライブラリ統計
   uv run prewar fix output/x.txt      # テキスト後処理（正規化/口語体化）
+  uv run prewar diff <doc_id>        # 変換前後の差分を色付き表示
   uv run prewar check                # 環境チェック
         """,
     )
@@ -107,6 +109,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_fix = sub.add_parser("fix", help="OCRテキストを正規化/口語体化")
     postprocess.add_arguments(p_fix)
     p_fix.set_defaults(func=postprocess.run)
+
+    # diff（= diff_viewer）
+    p_diff = sub.add_parser("diff", help="変換前後の差分を色付き表示")
+    diff_viewer.add_arguments(p_diff)
+    library.add_library_root_argument(p_diff)
+    p_diff.set_defaults(func=diff_viewer.run)
 
     # check（= setup_check）
     p_check = sub.add_parser("check", help="環境を確認する")
@@ -170,6 +178,17 @@ def _menu_fix() -> int:
     return postprocess.run(args)
 
 
+def _menu_diff() -> int:
+    target = questionary.text("ドキュメントID（library/ 直下のフォルダ名）:").ask()
+    if not target or not target.strip():
+        print("入力が空のため中止しました。")
+        return 0
+    args = _defaults_for(diff_viewer.add_arguments, stub=["__stub__"])
+    args.target = target.strip()
+    args.library_root = CONFIG.get("paths.library")
+    return diff_viewer.run(args)
+
+
 def interactive_menu() -> int:
     """引数なし実行時の対話メニュー"""
     actions = {
@@ -177,6 +196,7 @@ def interactive_menu() -> int:
         "撮りため（範囲スクショ・macOS）": _menu_shoot,
         "検索（ライブラリ全文検索）": _menu_search,
         "口語体変換（テキスト後処理）": _menu_fix,
+        "差分を見る（変換チェック）": _menu_diff,
         "環境確認": setup_check.main,
         "終了": None,
     }

@@ -32,6 +32,7 @@ _DEFAULTS: dict[str, Any] = {
     "chunk": {"size": 2000, "overlap": 200},
     "llm": {"temperature": 0.5, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.1},
     "search": {"limit": 20, "min_query_chars": 3},
+    "diff": {"color": True, "context": 30},
 }
 
 # プロジェクトルート（utils/ の親）。config.toml はここに置く。
