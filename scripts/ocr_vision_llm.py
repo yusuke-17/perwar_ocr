@@ -25,6 +25,7 @@ from pathlib import Path
 
 import questionary
 
+from utils.config import CONFIG
 from utils.library_writer import (
     DocumentRecord,
     MetaModernize,
@@ -69,13 +70,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--output",
         "-o",
         type=str,
-        default="output",
+        default=CONFIG.get("paths.output"),
         help="--legacy-output 時の旧形式保存先（デフォルト: output/）",
     )
     parser.add_argument(
         "--library-root",
         type=str,
-        default="library",
+        default=CONFIG.get("paths.library"),
         help="ライブラリのルートディレクトリ（デフォルト: library/）",
     )
     parser.add_argument(
@@ -136,7 +137,7 @@ def parse_args() -> argparse.Namespace:
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
-INPUT_DIR = Path("input")
+INPUT_DIR = Path(CONFIG.get("paths.input"))
 
 
 def select_image_interactive() -> Path | None:

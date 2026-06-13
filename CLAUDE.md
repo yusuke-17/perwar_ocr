@@ -42,6 +42,7 @@ uv add <package>
 - `scripts/` - 実行スクリプト（CLI）
 - `utils/` - PJ固有ユーティリティ（Ollama, OCR, LLM等）
 - `input/` / `output/` - 入出力データ（Git管理外）
+- `config.toml` - 設定の上書きファイル（モデル名/パス/チャンク/LLM/検索）。Git管理
 - `plan/` - 実装計画
 - `survey/` - 調査レポート
 
@@ -49,6 +50,7 @@ uv add <package>
 - Python実行は必ず `uv run` 経由
 - 機密資料（input/, output/）はGit管理しない
 - 新しいライブラリ追加時は `uv add` を使用
+- 設定値はコードに直書きせず `config.toml` で管理（デフォルトの正解は `utils/config.py` の `_DEFAULTS`、`config.toml` は差分のみ）
 - **外部API・クラウドサービスへの資料送信は絶対禁止**
 
 ## 重要な制約

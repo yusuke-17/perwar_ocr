@@ -27,6 +27,7 @@ import sys
 import questionary
 
 from scripts import library, ocr_vision_llm, postprocess, setup_check
+from utils.config import CONFIG
 
 
 # ---------- サブコマンド用ディスパッチャ ----------
@@ -148,7 +149,7 @@ def _menu_search() -> int:
         print("検索語が空のため中止しました。")
         return 0
     args = _defaults_for(library.add_find_arguments, stub=["__stub__"])
-    args.library_root = "library"
+    args.library_root = CONFIG.get("paths.library")
     args.query = answer.split()
     return library.cmd_find(args)
 

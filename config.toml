@@ -1,0 +1,30 @@
+# prewar-ocr 設定ファイル（差分オーバーライド）
+#
+# デフォルト値の正解は utils/config.py の _DEFAULTS にある。
+# このファイルには「デフォルトから変えたい値だけ」を書けばよい。
+# ここに書いた行だけが効き、消せばデフォルトに戻る。空でも動く。
+
+[models]
+ocr = "glm-ocr"          # OCRに使うモデル
+modernize = "qwen3.5:9b" # 口語体変換に使うモデル
+
+# 以下も上書きできる（必要になったらコメントを外して値を書く）:
+#
+# [paths]
+# input = "input"        # OCR対象画像の入力ディレクトリ
+# output = "output"      # 旧形式テキストの出力先
+# library = "library"    # ライブラリ（保存先・検索対象）のルート
+#
+# [chunk]
+# size = 2000            # 口語体変換の1チャンクの文字数
+# overlap = 200          # チャンク間のオーバーラップ文字数
+#
+# [llm]
+# temperature = 0.5      # 創造性（低いほど原文に忠実）
+# top_p = 0.9
+# top_k = 40
+# repeat_penalty = 1.1
+#
+# [search]
+# limit = 20             # 検索結果の表示件数
+# min_query_chars = 3    # trigram検索できる最小文字数

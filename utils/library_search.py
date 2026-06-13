@@ -21,13 +21,14 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from utils.config import CONFIG
 from utils.text_normalizer import normalize_query
 
 # ---------- 定数 ----------
 
 INDEX_DIR_NAME = ".index"
 INDEX_DB_NAME = "search.db"
-TRIGRAM_MIN_QUERY_CHARS = 3  # FTS5 trigram は3文字未満を扱えない
+TRIGRAM_MIN_QUERY_CHARS = CONFIG.get("search.min_query_chars")  # FTS5 trigram は3文字未満を扱えない
 
 
 # ---------- データクラス ----------

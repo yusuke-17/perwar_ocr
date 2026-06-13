@@ -31,6 +31,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from utils.config import CONFIG
 from utils.text_normalizer import normalize_text, find_normalizations
 from senzen_word.kana import find_historical_kana, find_katakana_particles
 
@@ -39,7 +40,7 @@ def postprocess(
     text: str,
     normalize: bool = True,
     modernize: bool = False,
-    modernize_model: str = "qwen3.5:9b",
+    modernize_model: str = CONFIG.get("models.modernize"),
 ) -> str:
     """
     OCR出力テキストに後処理を適用する
@@ -139,7 +140,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--modernize-model",
         type=str,
-        default="qwen3.5:9b",
+        default=CONFIG.get("models.modernize"),
         help="リライトに使用するLLMモデル名（デフォルト: qwen3.5:9b）",
     )
 

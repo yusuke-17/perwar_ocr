@@ -28,9 +28,11 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from utils.config import CONFIG
+
 # ---------- 定数 ----------
 
-LIBRARY_ROOT = Path("library")
+LIBRARY_ROOT = Path(CONFIG.get("paths.library"))
 SCHEMA_VERSION = 1
 
 _TZ_JST = ZoneInfo("Asia/Tokyo")

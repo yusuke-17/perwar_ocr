@@ -20,6 +20,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
+from utils.config import CONFIG
 from utils.library_search import (
     IndexStats,
     LibraryIndex,
@@ -33,7 +34,7 @@ def add_library_root_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--library-root",
         type=str,
-        default="library",
+        default=CONFIG.get("paths.library"),
         help="ライブラリのルートディレクトリ（デフォルト: library/）",
     )
 
@@ -58,7 +59,7 @@ def add_find_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--limit",
         type=int,
-        default=20,
+        default=CONFIG.get("search.limit"),
         help="表示件数の上限（デフォルト: 20）",
     )
     parser.add_argument(

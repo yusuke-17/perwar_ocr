@@ -13,15 +13,16 @@
 
 import time
 
+from utils.config import CONFIG
 from utils.ollama_client import OllamaConnectionError, OllamaModelNotFoundError
 
 # ---------- 定数 ----------
 
-DEFAULT_TEXT_MODEL = "qwen3.5:9b"
+DEFAULT_TEXT_MODEL = CONFIG.get("models.modernize")
 
 # チャンク分割の設定
-DEFAULT_CHUNK_SIZE = 2000  # 文字数
-DEFAULT_CHUNK_OVERLAP = 200  # オーバーラップ文字数
+DEFAULT_CHUNK_SIZE = CONFIG.get("chunk.size")  # 文字数
+DEFAULT_CHUNK_OVERLAP = CONFIG.get("chunk.overlap")  # オーバーラップ文字数
 
 SYSTEM_PROMPT = """\
 あなたは戦前の日本語を現代の読みやすい日本語に書き直す専門家です。
@@ -192,12 +193,7 @@ class TextModernizer:
                 model=self.model,
                 messages=messages,
                 think=False,
-                options={
-                    "temperature": 0.5,
-                    "top_p": 0.9,
-                    "top_k": 40,
-                    "repeat_penalty": 1.1,
-                },
+                options=CONFIG.get("llm"),
             )
         except ConnectionError:
             raise OllamaConnectionError(

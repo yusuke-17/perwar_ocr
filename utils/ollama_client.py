@@ -9,9 +9,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from utils.config import CONFIG
+
 # ---------- 定数 ----------
 
-DEFAULT_MODEL = "glm-ocr"
+DEFAULT_MODEL = CONFIG.get("models.ocr")
 
 DEFAULT_PROMPT = "画像内のテキストをすべて正確に読み取ってください。"
 
