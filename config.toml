@@ -28,3 +28,10 @@ modernize = "qwen3.5:9b" # 口語体変換に使うモデル
 # [search]
 # limit = 20             # 検索結果の表示件数
 # min_query_chars = 3    # trigram検索できる最小文字数
+#
+# [preprocess]            # 画像前処理（OCR入力前の整形・A1）
+# enabled = true          # 前処理全体のON/OFF（--no-preprocess で実行時OFF）
+# deskew = true           # 傾き補正
+# denoise = true          # ノイズ除去（軽め）
+# contrast = true         # CLAHEコントラスト強調
+# binarize = "none"       # 二値化方式: "none" | "otsu" | "adaptive"（既定OFF）

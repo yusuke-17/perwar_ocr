@@ -74,6 +74,15 @@ class MetaModernize:
 
 
 @dataclass
+class MetaPreprocess:
+    """meta.json の preprocess セクション（画像前処理の記録）"""
+
+    enabled: bool
+    steps: list[str]  # 実際に適用した処理名（例: ["grayscale", "clahe"]）
+    elapsed_seconds: float
+
+
+@dataclass
 class DocumentRecord:
     """1件の処理結果を集約するレコード（save_document への入力）"""
 
@@ -83,6 +92,9 @@ class DocumentRecord:
     ocr_meta: MetaOcr
     normalization: MetaNormalization
     modernize: MetaModernize
+    # 画像前処理（A1）。無効時は None で、preprocessed 画像もメタも残さない。
+    preprocessed_paths: list[Path] | None = None
+    preprocess: MetaPreprocess | None = None
     tags: list[str] = field(default_factory=list)
     note: str = ""
 
@@ -167,6 +179,13 @@ def save_document(
     # 元画像をコピー（実体コピー）
     source_names = _copy_sources(record.source_paths, doc_dir)
 
+    # 前処理後画像をコピー（A1。temp 削除前にここで実体コピーする）
+    preprocessed_names: list[str] = []
+    if record.preprocessed_paths:
+        preprocessed_names = _copy_images(
+            record.preprocessed_paths, doc_dir, "preprocessed"
+        )
+
     # ocr_raw.txt
     (doc_dir / "ocr_raw.txt").write_text(record.ocr_raw, encoding="utf-8", newline="\n")
 
@@ -199,6 +218,15 @@ def save_document(
         "tags": list(record.tags),
         "note": record.note,
     }
+
+    # 前処理（A1）が有効なら preprocess セクションと前処理後画像名を記録する
+    if record.preprocess is not None:
+        meta["preprocessed_sources"] = preprocessed_names
+        meta["preprocess"] = {
+            "enabled": record.preprocess.enabled,
+            "steps": list(record.preprocess.steps),
+            "elapsed_seconds": round(record.preprocess.elapsed_seconds, 2),
+        }
     meta_json = json.dumps(meta, indent=2, ensure_ascii=False) + "\n"
     (doc_dir / "meta.json").write_text(meta_json, encoding="utf-8", newline="\n")
 
@@ -206,20 +234,25 @@ def save_document(
 
 
 def _copy_sources(source_paths: list[Path], doc_dir: Path) -> list[str]:
-    """元画像を doc_dir にコピーし、コピー先のファイル名リストを返す
+    """元画像を doc_dir に source という基底名でコピーする（後方互換ラッパー）"""
+    return _copy_images(source_paths, doc_dir, "source")
 
-    1枚: source{元拡張子}
-    複数枚: source_01{元拡張子}, source_02{元拡張子}, ...
+
+def _copy_images(paths: list[Path], doc_dir: Path, basename: str) -> list[str]:
+    """画像群を doc_dir に basename を基底名でコピーし、コピー先名リストを返す
+
+    1枚: {basename}{元拡張子}
+    複数枚: {basename}_01{元拡張子}, {basename}_02{元拡張子}, ...
     """
-    if len(source_paths) == 1:
-        src = source_paths[0]
-        dest_name = f"source{src.suffix}"
+    if len(paths) == 1:
+        src = paths[0]
+        dest_name = f"{basename}{src.suffix}"
         shutil.copy2(src, doc_dir / dest_name)
         return [dest_name]
 
     names: list[str] = []
-    for i, src in enumerate(source_paths, start=1):
-        dest_name = f"source_{i:02d}{src.suffix}"
+    for i, src in enumerate(paths, start=1):
+        dest_name = f"{basename}_{i:02d}{src.suffix}"
         shutil.copy2(src, doc_dir / dest_name)
         names.append(dest_name)
     return names

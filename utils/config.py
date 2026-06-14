@@ -33,6 +33,13 @@ _DEFAULTS: dict[str, Any] = {
     "llm": {"temperature": 0.5, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.1},
     "search": {"limit": 20, "min_query_chars": 3},
     "diff": {"color": True, "context": 30},
+    "preprocess": {
+        "enabled": True,      # デフォルトON（--no-preprocess で実行時OFF）
+        "deskew": True,       # 傾き補正
+        "denoise": True,      # ノイズ除去（軽め）
+        "contrast": True,     # CLAHEコントラスト強調
+        "binarize": "none",   # "none" | "otsu" | "adaptive"（既定OFF）
+    },
 }
 
 # プロジェクトルート（utils/ の親）。config.toml はここに置く。
