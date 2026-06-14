@@ -15,6 +15,7 @@ import time
 
 from utils.config import CONFIG
 from utils.ollama_client import OllamaConnectionError, OllamaModelNotFoundError
+from utils.progress import progress_active, track
 
 # ---------- 定数 ----------
 
@@ -108,14 +109,19 @@ class TextModernizer:
         # 本文をチャンクに分割
         chunks = self._split_text(body)
 
-        # 各チャンクをリライト
+        # 各チャンクをリライト。進捗が有効ならバー表示、無効なら従来 print。
+        # （バーと print の二重表示を避けるため有効時は print を抑制）
         modernized_chunks = []
-        for i, chunk in enumerate(chunks):
-            print(f"    リライト中... ({i + 1}/{len(chunks)})")
+        show_print = not progress_active()
+        for i, chunk in enumerate(
+            track(chunks, total=len(chunks), description="    口語体変換中")
+        ):
+            if show_print:
+                print(f"    リライト中... ({i + 1}/{len(chunks)})")
             start = time.time()
             result = self._modernize_chunk(chunk)
-            elapsed = time.time() - start
-            print(f"    → {elapsed:.1f}秒")
+            if show_print:
+                print(f"    → {time.time() - start:.1f}秒")
             modernized_chunks.append(result)
 
         # ヘッダーとリライト結果を結合

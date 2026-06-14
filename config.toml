@@ -35,3 +35,7 @@ modernize = "qwen3.5:9b" # 口語体変換に使うモデル
 # denoise = true          # ノイズ除去（軽め）
 # contrast = true         # CLAHEコントラスト強調
 # binarize = "none"       # 二値化方式: "none" | "otsu" | "adaptive"（既定OFF）
+#
+# [progress]              # 進捗表示（OCR/LLM待ちのスピナー・バー・D2）
+# enabled = true          # 進捗表示のON/OFF（非TTY=パイプ・リダイレクト時は自動OFF）
+# spinner = "dots"        # スピナー種別: "dots" | "line" | "arc" | "bouncingBar"

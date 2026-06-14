@@ -40,6 +40,10 @@ _DEFAULTS: dict[str, Any] = {
         "contrast": True,     # CLAHEコントラスト強調
         "binarize": "none",   # "none" | "otsu" | "adaptive"（既定OFF）
     },
+    "progress": {
+        "enabled": True,      # 進捗表示(スピナー/バー)のON/OFF。非TTY時は自動でOFF扱い
+        "spinner": "dots",    # rich スピナー種別: "dots" | "line" | "arc" 等
+    },
 }
 
 # プロジェクトルート（utils/ の親）。config.toml はここに置く。

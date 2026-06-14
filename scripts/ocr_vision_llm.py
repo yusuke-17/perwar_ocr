@@ -48,6 +48,7 @@ from utils.ollama_client import (
     OllamaModelNotFoundError,
     OllamaOCRClient,
 )
+from utils.progress import spinner
 from utils.text_normalizer import normalize_text
 from utils.text_modernizer import TextModernizer
 from utils import screen_capture
@@ -276,7 +277,10 @@ def _run_ocr(client: OllamaOCRClient, image_path: Path) -> OCRResult | None:
     text だけでなく OCRResult まるごと返す。
     """
     try:
-        result = client.ocr(image_path)
+        # OCR推論は所要時間が読めないため、待機中はスピナーを回す
+        # （非TTY時はメッセージを1行 print してフォールバック）
+        with spinner(f"  OCR推論中: {image_path.name} ..."):
+            result = client.ocr(image_path)
     except ImageFileError as e:
         print(f"\n✗ 画像エラー: {e}")
         return None
