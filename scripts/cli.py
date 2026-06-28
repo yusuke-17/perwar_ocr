@@ -27,7 +27,14 @@ import sys
 
 import questionary
 
-from scripts import diff_viewer, library, ocr_vision_llm, postprocess, setup_check
+from scripts import (
+    clean,
+    diff_viewer,
+    library,
+    ocr_vision_llm,
+    postprocess,
+    setup_check,
+)
 from utils.config import CONFIG
 
 
@@ -116,6 +123,14 @@ def build_parser() -> argparse.ArgumentParser:
     library.add_library_root_argument(p_diff)
     p_diff.set_defaults(func=diff_viewer.run)
 
+    # clean（データ整理）
+    p_clean = sub.add_parser(
+        "clean", help="データ整理（input掃除 / library誤記録削除）"
+    )
+    clean.add_arguments(p_clean)
+    library.add_library_root_argument(p_clean)
+    p_clean.set_defaults(func=clean.run)
+
     # check（= setup_check）
     p_check = sub.add_parser("check", help="環境を確認する")
     p_check.set_defaults(func=setup_check.run)
@@ -189,6 +204,25 @@ def _menu_diff() -> int:
     return diff_viewer.run(args)
 
 
+def _menu_clean() -> int:
+    """データ整理: input掃除 / library誤記録削除 を選んで実行する"""
+    mode = questionary.select(
+        "データ整理 — 何を片付けますか？",
+        choices=[
+            "input整理（処理後の画像・セッションを掃除）",
+            "library誤記録の削除（検索・要約の汚染対策）",
+        ],
+    ).ask()
+    if mode is None:
+        return 0
+    # mode の choices を満たすダミーで Namespace を作り、後で上書きする
+    args = _defaults_for(clean.add_arguments, stub=["input"])
+    args.library_root = CONFIG.get("paths.library")
+    args.mode = "input" if mode.startswith("input") else "library"
+    # 対話経由でも確認プロンプトは clean 側で出す（yes は False のまま）
+    return clean.run(args)
+
+
 def interactive_menu() -> int:
     """引数なし実行時の対話メニュー"""
     actions = {
@@ -197,6 +231,7 @@ def interactive_menu() -> int:
         "検索（ライブラリ全文検索）": _menu_search,
         "口語体変換（テキスト後処理）": _menu_fix,
         "差分を見る（変換チェック）": _menu_diff,
+        "データ整理（input掃除 / 誤記録削除）": _menu_clean,
         "環境確認": setup_check.main,
         "終了": None,
     }

@@ -149,6 +149,28 @@ class LibraryIndex:
             self.db_path.unlink()
         return self.update()
 
+    def delete(self, doc_id: str) -> bool:
+        """インデックスから文書を1件だけ削除する。
+
+        documents / search 両テーブルから該当 ID を消す。
+        削除前に存在した場合のみ True を返す（存在しなければ False）。
+        library フォルダ自体の削除は呼び出し側の責務。
+        """
+        conn = self._connect()
+        try:
+            self._ensure_schema(conn)
+            existed = (
+                conn.execute(
+                    "SELECT 1 FROM documents WHERE id = ?", (doc_id,)
+                ).fetchone()
+                is not None
+            )
+            self._delete_doc(conn, doc_id)
+            conn.commit()
+            return existed
+        finally:
+            conn.close()
+
     def search(self, query: str, limit: int = 20) -> list[SearchHit]:
         """全文検索
 
