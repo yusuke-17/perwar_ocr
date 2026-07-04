@@ -150,10 +150,15 @@ class TextModernizer:
 
     def _split_text(self, text: str) -> list[str]:
         """
-        長文を句点「。」を基準にチャンク分割する
+        長文をチャンク分割する
 
-        - chunk_size 以下なら分割しない
-        - 句点で文を区切り、chunk_size を超えないように文をまとめる
+        - chunk_size 以下ならそのまま返す
+        - 句点「。」で文に区切る（従来の挙動）
+        - 1文が chunk_size を超える場合は _split_oversized でさらに分解し、
+          どんな入力でも各断片が必ず chunk_size 以下になることを保証する
+          （句読点の乏しい戦前文書で全文が1チャンク化し、超過分が
+          無言で切り捨てられて後半が欠落するのを防ぐ = G1修正）
+        - 断片を chunk_size を超えない範囲で greedy に結合する
         """
         if len(text) <= self.chunk_size:
             return [text]
@@ -162,27 +167,82 @@ class TextModernizer:
         raw_sentences = text.split("。")
         sentences = [s + "。" for s in raw_sentences if s.strip()]
 
-        chunks = []
+        # 上限超えの文をさらに分解し、全断片を chunk_size 以下に揃える
+        pieces: list[str] = []
+        for sentence in sentences:
+            if len(sentence) <= self.chunk_size:
+                pieces.append(sentence)
+            else:
+                pieces.extend(self._split_oversized(sentence))
+
+        # 断片を chunk_size を超えないように greedy に結合
+        chunks: list[str] = []
         current_chunk: list[str] = []
         current_length = 0
 
-        for sentence in sentences:
-            sentence_length = len(sentence)
+        for piece in pieces:
+            piece_length = len(piece)
 
-            if current_length + sentence_length > self.chunk_size and current_chunk:
+            if current_length + piece_length > self.chunk_size and current_chunk:
                 # 現在のチャンクを確定
                 chunks.append("".join(current_chunk))
                 current_chunk = []
                 current_length = 0
 
-            current_chunk.append(sentence)
-            current_length += sentence_length
+            current_chunk.append(piece)
+            current_length += piece_length
 
         # 最後のチャンク
         if current_chunk:
             chunks.append("".join(current_chunk))
 
         return chunks
+
+    def _split_oversized(self, sentence: str) -> list[str]:
+        """
+        chunk_size を超える1文を、読点・改行・最終手段の文字数で分割する
+
+        自然な切れ目を優先し、無ければ機械的に切る:
+        1. 「、」「改行」を境界に再分割（区切り文字は手前の断片に残す）
+        2. それでも超える断片は chunk_size 文字ごとに強制カット（最終手段）
+
+        返り値の全断片が必ず chunk_size 以下になることを保証する。
+        """
+        result: list[str] = []
+        for part in self._split_keep_delims(sentence, ("、", "\n")):
+            if len(part) <= self.chunk_size:
+                result.append(part)
+                continue
+
+            # 切れ目が作れなかった長文 → 文字数で強制カット。
+            # 無言欠落と誤解されないよう注意を出す（既存の進捗表示に合わせ print）
+            print(
+                f"    ⚠ 句読点のない長文を {self.chunk_size} 文字で強制分割します"
+                f"（{len(part)} 文字）"
+            )
+            for i in range(0, len(part), self.chunk_size):
+                result.append(part[i : i + self.chunk_size])
+
+        return result
+
+    @staticmethod
+    def _split_keep_delims(text: str, delimiters: tuple[str, ...]) -> list[str]:
+        """
+        指定の区切り文字で分割し、区切り文字を手前の断片の末尾に残す
+
+        例: _split_keep_delims("あ、い\nう", ("、", "\n")) -> ["あ、", "い\n", "う"]
+        区切り文字を含まない文字列はそのまま1件返す。
+        """
+        pieces: list[str] = []
+        current: list[str] = []
+        for ch in text:
+            current.append(ch)
+            if ch in delimiters:
+                pieces.append("".join(current))
+                current = []
+        if current:
+            pieces.append("".join(current))
+        return pieces
 
     def _modernize_chunk(self, chunk: str) -> str:
         """1チャンクをOllama APIでリライトする"""
