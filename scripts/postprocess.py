@@ -25,6 +25,11 @@
 
     # リライト用モデルを変更
     uv run python scripts/postprocess.py output/sample_ocr.txt --modernize --modernize-model qwen3:8b
+
+終了コード:
+    0  全ファイル成功
+    2  一部ファイルをスキップしたが、残りは変換済み（Ctrl+C 中断を含む）
+    1  1件も変換できなかった（入力エラーを含む）
 """
 
 import argparse
@@ -64,7 +69,14 @@ def postprocess(
         from utils.text_modernizer import TextModernizer
 
         modernizer = TextModernizer(model=modernize_model)
-        text = modernizer.modernize(text)
+        # チャンク単位の失敗は原文のまま吸収される（失敗数だけ知らせる）
+        result = modernizer.modernize_detailed(text)
+        if result.failures:
+            print(
+                f"  ⚠ {len(result.failures)}/{result.chunk_total} チャンクは"
+                "変換できず原文のまま残しました"
+            )
+        text = result.text
     return text
 
 
@@ -75,8 +87,14 @@ def process_file(
     modernize: bool,
     modernize_model: str,
     show_changes: bool,
-) -> None:
-    """1つのテキストファイルを後処理する"""
+) -> bool:
+    """1つのテキストファイルを後処理する
+
+    Returns:
+        保存まで到達したら True、失敗したら False
+        （一括処理で1ファイルの失敗が残りを巻き添えにしないため、
+        例外は呼び出し側で握って次のファイルへ進む）
+    """
     original = input_path.read_text(encoding="utf-8")
     converted = postprocess(original, normalize, modernize, modernize_model)
 
@@ -107,6 +125,7 @@ def process_file(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(converted, encoding="utf-8")
     print(f"  保存先: {output_path}")
+    return True
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -178,10 +197,17 @@ def run(args: argparse.Namespace) -> int:
     if input_path.is_file():
         # 単一ファイル
         output_path = Path(args.output) if args.output else None
-        process_file(
-            input_path, output_path, normalize,
-            args.modernize, args.modernize_model, args.diff,
-        )
+        try:
+            process_file(
+                input_path, output_path, normalize,
+                args.modernize, args.modernize_model, args.diff,
+            )
+        except KeyboardInterrupt:
+            print("\n⚠ 中断しました")
+            return 1
+        except Exception as e:
+            print(f"\n✗ 変換に失敗: {input_path} — {e}")
+            return 1
 
     elif input_path.is_dir():
         # ディレクトリ内の全 .txt を処理
@@ -190,22 +216,46 @@ def run(args: argparse.Namespace) -> int:
             print(f"\nエラー: '{input_path}' に .txt ファイルがありません")
             return 1
 
-        print(f"\n  対象ファイル数: {len(txt_files)}")
+        targets = [f for f in txt_files if not f.stem.endswith("_modern")]
+        print(f"\n  対象ファイル数: {len(targets)}")
 
-        for txt_file in txt_files:
-            if txt_file.stem.endswith("_modern"):
-                continue  # 既に変換済みのファイルはスキップ
+        failed: list[str] = []
+        done = 0
+        interrupted = False
 
+        for txt_file in targets:
             if args.output:
                 out_dir = Path(args.output)
                 output_path = out_dir / txt_file.name
             else:
                 output_path = None
 
-            process_file(
-                txt_file, output_path, normalize,
-                args.modernize, args.modernize_model, args.diff,
-            )
+            # 1ファイルの失敗で残りを巻き添えにしない（G2 と同じ方針）
+            try:
+                process_file(
+                    txt_file, output_path, normalize,
+                    args.modernize, args.modernize_model, args.diff,
+                )
+            except KeyboardInterrupt:
+                print("\n⚠ 中断しました。ここまでの変換結果は保存済みです")
+                interrupted = True
+                break
+            except Exception as e:
+                print(f"  ✗ 変換に失敗（スキップ）: {txt_file.name} — {e}")
+                failed.append(txt_file.name)
+                continue
+            done += 1
+
+        if failed:
+            print(f"\n⚠ {len(targets)}件中 {len(failed)}件が変換できませんでした:")
+            for name in failed:
+                print(f"  - {name}")
+
+        if done == 0 and (failed or interrupted):
+            return 1
+        if failed or interrupted:
+            print("\n完了（一部スキップ）")
+            return 2
 
     print("\n完了!")
     return 0

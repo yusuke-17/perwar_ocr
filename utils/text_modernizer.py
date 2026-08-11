@@ -9,9 +9,14 @@
 
     modernizer = TextModernizer()
     modern_text = modernizer.modernize(old_text)
+
+    # 失敗チャンクの内訳も欲しい場合
+    result = modernizer.modernize_detailed(old_text)
+    print(result.text, result.failures, result.aborted)
 """
 
 import time
+from dataclasses import dataclass, field
 
 from utils.config import CONFIG
 from utils.ollama_client import OllamaConnectionError, OllamaModelNotFoundError
@@ -24,6 +29,11 @@ DEFAULT_TEXT_MODEL = CONFIG.get("models.modernize")
 # チャンク分割の設定
 DEFAULT_CHUNK_SIZE = CONFIG.get("chunk.size")  # 文字数
 DEFAULT_CHUNK_OVERLAP = CONFIG.get("chunk.overlap")  # オーバーラップ文字数
+
+# チャンク変換が失敗したときの方針
+#   "keep_original": 原文のまま採用して次のチャンクへ進む（既定）
+#   "abort":         例外を送出して変換全体を中止する（従来の挙動）
+DEFAULT_ON_CHUNK_ERROR = CONFIG.get("chunk.on_error", "keep_original")
 
 SYSTEM_PROMPT = """\
 あなたは戦前の日本語を現代の読みやすい日本語に書き直す専門家です。
@@ -59,6 +69,36 @@ FEW_SHOT_EXAMPLES = [
 ]
 
 
+# ---------- 結果の型 ----------
+
+
+@dataclass
+class ChunkFailure:
+    """変換に失敗した1チャンクの記録"""
+
+    index: int  # 1始まりのチャンク番号
+    message: str
+
+
+@dataclass
+class ModernizeResult:
+    """modernize_detailed() の戻り値
+
+    text は「失敗チャンクを原文のまま埋めた」完全な本文。
+    LLMが落ちても文字が欠けないことを保証する（G1と同じ思想）。
+    """
+
+    text: str
+    chunk_total: int
+    failures: list[ChunkFailure] = field(default_factory=list)
+    aborted: bool = False  # Ctrl+C で途中打ち切りしたか
+
+    @property
+    def ok(self) -> bool:
+        """全チャンクが正常に変換できたか"""
+        return not self.failures and not self.aborted
+
+
 # ---------- メインクラス ----------
 
 
@@ -80,17 +120,19 @@ class TextModernizer:
         model: str = DEFAULT_TEXT_MODEL,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+        on_chunk_error: str = DEFAULT_ON_CHUNK_ERROR,
     ):
         self.model = model
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.on_chunk_error = on_chunk_error
 
     def modernize(self, text: str) -> str:
         """
-        文語体テキストを現代口語体に変換する
+        文語体テキストを現代口語体に変換する（後方互換のラッパー）
 
-        ヘッダー行（# で始まる行）はそのまま保持し、
-        本文部分のみをLLMでリライトする。
+        変換結果のテキストだけを返す。失敗チャンクの内訳も欲しい場合は
+        modernize_detailed() を使う。
 
         Args:
             text: 変換対象のテキスト
@@ -98,20 +140,45 @@ class TextModernizer:
         Returns:
             現代口語体に変換されたテキスト
         """
+        return self.modernize_detailed(text).text
+
+    def modernize_detailed(self, text: str) -> ModernizeResult:
+        """
+        文語体テキストを現代口語体に変換し、失敗の内訳も返す
+
+        ヘッダー行（# で始まる行）はそのまま保持し、本文部分のみをLLMでリライトする。
+
+        1チャンクの変換に失敗しても、そのチャンクは**原文のまま採用して続行**する
+        （on_chunk_error="abort" なら従来どおり例外送出）。50チャンク中1個の失敗で
+        成功済み49個分のLLM処理を捨てないため。Ctrl+C も同様に、未処理チャンクを
+        原文のまま残して打ち切る。
+
+        Args:
+            text: 変換対象のテキスト
+
+        Returns:
+            ModernizeResult（変換後テキスト・チャンク総数・失敗一覧・中断フラグ）
+
+        Raises:
+            OllamaConnectionError / OllamaModelNotFoundError:
+                事前のモデル存在確認に失敗した場合（1チャンクも変換できないため）
+        """
         self._check_model_available()
 
         # ヘッダーと本文を分離
         header_lines, body = self._separate_header(text)
 
         if not body.strip():
-            return text
+            return ModernizeResult(text=text, chunk_total=0)
 
         # 本文をチャンクに分割
         chunks = self._split_text(body)
 
         # 各チャンクをリライト。進捗が有効ならバー表示、無効なら従来 print。
         # （バーと print の二重表示を避けるため有効時は print を抑制）
-        modernized_chunks = []
+        modernized_chunks: list[str] = []
+        failures: list[ChunkFailure] = []
+        aborted = False
         show_print = not progress_active()
         for i, chunk in enumerate(
             track(chunks, total=len(chunks), description="    口語体変換中")
@@ -119,7 +186,24 @@ class TextModernizer:
             if show_print:
                 print(f"    リライト中... ({i + 1}/{len(chunks)})")
             start = time.time()
-            result = self._modernize_chunk(chunk)
+            try:
+                result = self._modernize_chunk(chunk)
+            except KeyboardInterrupt:
+                # 中断。未処理チャンクは原文のまま残して打ち切る（欠落させない）
+                print(f"\n    ⚠ 中断しました（{i + 1}/{len(chunks)} チャンク目）")
+                print("      残りは原文のまま残します")
+                modernized_chunks.extend(chunks[i:])
+                aborted = True
+                break
+            except Exception as e:
+                if self.on_chunk_error == "abort":
+                    raise
+                # 失敗チャンクは原文のまま採用。文字を消さないことを最優先する
+                print(
+                    f"    ⚠ チャンク {i + 1}/{len(chunks)} の変換に失敗（原文のまま）: {e}"
+                )
+                failures.append(ChunkFailure(index=i + 1, message=str(e)))
+                result = chunk
             if show_print:
                 print(f"    → {time.time() - start:.1f}秒")
             modernized_chunks.append(result)
@@ -128,8 +212,16 @@ class TextModernizer:
         modernized_body = "\n".join(modernized_chunks)
 
         if header_lines:
-            return header_lines + "\n\n" + modernized_body
-        return modernized_body
+            modernized = header_lines + "\n\n" + modernized_body
+        else:
+            modernized = modernized_body
+
+        return ModernizeResult(
+            text=modernized,
+            chunk_total=len(chunks),
+            failures=failures,
+            aborted=aborted,
+        )
 
     def _separate_header(self, text: str) -> tuple[str, str]:
         """ヘッダー行（# で始まる行）と本文を分離する"""

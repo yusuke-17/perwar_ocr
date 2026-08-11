@@ -67,10 +67,31 @@ class MetaNormalization:
 
 @dataclass
 class MetaModernize:
-    """meta.json の modernize セクション"""
+    """meta.json の modernize セクション
+
+    error / failed_chunks は「口語体変換が部分的にしか成功しなかった」ときの記録。
+    正常時は既定値のままで、meta.json にもキーを出さない（従来と同じ形を保つ）。
+    """
 
     enabled: bool
     model: str
+    error: str = ""  # 変換が丸ごと失敗した理由（"interrupted" は Ctrl+C 中断）
+    failed_chunks: int = 0  # 変換できず原文のまま採用したチャンク数
+    chunk_total: int = 0
+
+
+@dataclass
+class MetaPageFailure:
+    """meta.json の pages.skipped に入る1件（OCRに失敗／中断したページ）
+
+    バッチ処理で1枚失敗しても成功分は保存するため、
+    「何が欠けたか」を記録して後から再試行できるようにする。
+    """
+
+    index: int  # 元の並びでの1始まりページ番号
+    source: str  # 元画像のファイル名
+    reason: str  # "image" | "connection" | "model" | "unknown" | "interrupted"
+    message: str
 
 
 @dataclass
@@ -97,6 +118,10 @@ class DocumentRecord:
     preprocess: MetaPreprocess | None = None
     tags: list[str] = field(default_factory=list)
     note: str = ""
+    # 部分成功の記録（G2）。失敗が無ければ meta.json に pages セクションを出さない。
+    page_failures: list[MetaPageFailure] = field(default_factory=list)
+    pages_total: int = 0  # 元の総ページ数。0 なら len(source_paths) を採用
+    pages_aborted: bool = False  # 連続失敗／中断で残りページを処理しなかったか
 
 
 # ---------- ヘルパー関数 ----------
@@ -218,6 +243,32 @@ def save_document(
         "tags": list(record.tags),
         "note": record.note,
     }
+
+    # 口語体変換が部分的にしか成功しなかった場合のみ、その事実を残す（G2b）
+    if record.modernize.error:
+        meta["modernize"]["error"] = record.modernize.error
+    if record.modernize.failed_chunks:
+        meta["modernize"]["failed_chunks"] = record.modernize.failed_chunks
+        meta["modernize"]["chunk_total"] = record.modernize.chunk_total
+
+    # OCRに失敗／中断したページがある場合のみ pages セクションを足す（G2）。
+    # 全ページ成功時は従来の meta.json と同じ形のままにして差分を出さない。
+    if record.page_failures:
+        total = record.pages_total or len(record.source_paths)
+        meta["pages"] = {
+            "total": total,
+            "succeeded": len(record.source_paths),
+            "aborted": record.pages_aborted,
+            "skipped": [
+                {
+                    "index": f.index,
+                    "source": f.source,
+                    "reason": f.reason,
+                    "message": f.message,
+                }
+                for f in record.page_failures
+            ],
+        }
 
     # 前処理（A1）が有効なら preprocess セクションと前処理後画像名を記録する
     if record.preprocess is not None:

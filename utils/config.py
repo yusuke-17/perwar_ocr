@@ -29,7 +29,14 @@ from typing import Any
 _DEFAULTS: dict[str, Any] = {
     "models": {"ocr": "glm-ocr", "modernize": "qwen3.5:9b"},
     "paths": {"input": "input", "output": "output", "library": "library"},
-    "chunk": {"size": 2000, "overlap": 200},
+    "chunk": {
+        "size": 2000,
+        "overlap": 200,
+        # 口語体変換で1チャンクが失敗したときの方針
+        #   "keep_original": 原文のまま採用して続行（既定。文字を欠けさせない）
+        #   "abort":         例外を投げて変換全体を中止（従来の挙動）
+        "on_error": "keep_original",
+    },
     "llm": {"temperature": 0.5, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.1},
     "search": {"limit": 20, "min_query_chars": 3},
     "diff": {"color": True, "context": 30},
@@ -39,6 +46,14 @@ _DEFAULTS: dict[str, Any] = {
         "denoise": True,      # ノイズ除去（軽め）
         "contrast": True,     # CLAHEコントラスト強調
         "binarize": "none",   # "none" | "otsu" | "adaptive"（既定OFF）
+    },
+    "batch": {
+        # 複数枚処理でページのOCRが失敗したときの方針
+        #   "skip":  失敗ページを記録して続行（既定。成功分を捨てない）
+        #   "abort": その場で中断（従来の挙動）
+        "on_page_error": "skip",
+        # 連続でこの回数失敗したら打ち切る（Ollama停止時に全ページ待たないため）。0で無効
+        "abort_after_consecutive_failures": 3,
     },
     "progress": {
         "enabled": True,      # 進捗表示(スピナー/バー)のON/OFF。非TTY時は自動でOFF扱い
