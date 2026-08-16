@@ -1062,7 +1062,7 @@ wheels = [
 
 [[package]]
 name = "senzen-word"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "pkg/senzen_word" }
 
 [package.optional-dependencies]

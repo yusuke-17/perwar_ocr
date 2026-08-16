@@ -29,7 +29,7 @@ from senzen_word.kana import (
     find_hentaigana,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = ["convert", "find", "__version__"]
 

@@ -11,7 +11,9 @@ Unicode 10.0 (2017) で追加された変体仮名（Hentaigana）ブロック�
 各変体仮名のUnicode名から字母（元の漢字）と音を特定し、
 対応する現代ひらがなにマッピングする。
 
-データソース: hentaigana.json（Unicode NamesList準拠）
+データソース: data/hentaigana.json
+  tools/gen_hentaigana.py が unicodedata の正式名から生成する。
+  手で編集せず、生成スクリプトを直して再生成すること。
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from typing import Mapping
 
 # ---------- モジュールレベルキャッシュ ----------
 
-_TABLE: Mapping[int, int] | None = None
+_TABLE: Mapping[int, str] | None = None
 _MAP: dict[str, str] | None = None
 _INIT_LOCK = threading.Lock()
 
@@ -33,18 +35,28 @@ _INIT_LOCK = threading.Lock()
 
 
 def _load_hentaigana_table() -> dict[str, str]:
-    """data/hentaigana.json を読み込む"""
+    """data/hentaigana.json を読み込む
+
+    変換先は複数文字でも構わない（str.translate が許容する）。
+    不正な行は黙って捨てず、原因が分かる形で ValueError を送出する。
+
+    Raises:
+        ValueError: キーが1文字でない、または値が文字列でない場合
+    """
     data_dir = resources.files("senzen_word.kana") / "data"
     resource = data_dir / "hentaigana.json"
     content = resource.read_text(encoding="utf-8")
     raw = json.loads(content)
 
-    # 1文字→1文字のマッピングのみ保持
-    return {
-        k: v
-        for k, v in raw.items()
-        if isinstance(k, str) and isinstance(v, str) and len(k) == 1 and len(v) == 1
-    }
+    table: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or len(key) != 1:
+            raise ValueError(f"変換元は1文字である必要があります: {key!r}")
+        if not isinstance(value, str):
+            raise ValueError(f"変換先は文字列である必要があります: {key!r} -> {value!r}")
+        table[key] = value
+
+    return table
 
 
 def _ensure_initialized() -> None:
@@ -56,7 +68,7 @@ def _ensure_initialized() -> None:
         if _TABLE is not None:
             return
         _MAP = _load_hentaigana_table()
-        _TABLE = {ord(k): ord(v) for k, v in _MAP.items()}
+        _TABLE = {ord(k): v for k, v in _MAP.items()}
 
 
 # ---------- 公開関数 ----------

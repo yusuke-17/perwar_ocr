@@ -40,6 +40,21 @@ class TestConvert:
         assert "は" in result
         assert "の" in result
 
+    def test_hentaigana_feeds_historical_kana(self):
+        """変体仮名の変換結果が、続く歴史的仮名遣い変換の入力になる
+
+        U+1B017 (KA-1) + U+1B00A (U-1) → 「かう」→「こう」。
+        変体仮名変換を歴史的仮名遣い変換より後ろに置くと「かう」で止まる。
+        """
+        result = senzen_word.convert("\U0001B017\U0001B00A")
+        assert result == "こう"
+
+    def test_hentaigana_with_old_kanji(self):
+        """旧字体・変体仮名・カタカナ助詞が1つの文で同時に変換される"""
+        # 關東 + 変体仮名「あ」 + カタカナ助詞「ノ」
+        result = senzen_word.convert("關東\U0001B002ノ図")
+        assert result == "関東あの図"
+
     def test_empty_string(self):
         assert senzen_word.convert("") == ""
 

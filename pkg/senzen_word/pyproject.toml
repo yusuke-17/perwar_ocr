@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "senzen-word"
-version = "0.1.0"
+version = "0.2.0"
 description = "戦前日本語の旧字体・歴史的仮名遣い・カタカナ助詞・変体仮名を現代日本語に変換"
 readme = "README.md"
 license = "MIT"
