@@ -58,14 +58,18 @@ class MetaOcr:
 class MetaNormalization:
     """meta.json の normalization セクション
 
-    現状 normalize_text() は3項目を固定で実行するため、
-    呼び出し有無に応じて3項目とも同じ値（true/false）を入れる。
+    現状 normalize_text() は4項目を固定で実行するため、
+    呼び出し有無に応じて4項目とも同じ値（true/false）を入れる。
     将来 normalize_text を引数化したら個別に true/false を区別できるようにする。
+
+    hentaigana は後から追加した項目なので、既存の位置引数呼び出しを
+    壊さないよう既定値付きで末尾に置く。
     """
 
     old_kanji: bool
     historical_kana: bool
     ocr_misread_correction: bool
+    hentaigana: bool = False
 
 
 @dataclass
@@ -238,6 +242,7 @@ def save_document(
         },
         "normalization": {
             "old_kanji": record.normalization.old_kanji,
+            "hentaigana": record.normalization.hentaigana,
             "historical_kana": record.normalization.historical_kana,
             "ocr_misread_correction": record.normalization.ocr_misread_correction,
         },

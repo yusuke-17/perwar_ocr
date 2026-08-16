@@ -4,10 +4,11 @@
 OCR出力テキストに対して、以下の正規化を一括で行う:
   1. Unicode NFKC正規化（CJK互換漢字の統一）
   2. 旧字体→新字体 + 異体字正規化（senzen_word）
-  3. 半角→全角・カナ正規化（jaconv）
-  4. 歴史的仮名遣い→現代仮名遣い（senzen_word）
-  5. OCR誤読修正（辞書ベース + 文脈依存パターン）
-  6. 空白・句読点の正規化
+  3. 変体仮名→現代ひらがな（senzen_word）
+  4. 半角→全角・カナ正規化（jaconv）
+  5. 歴史的仮名遣い→現代仮名遣い（senzen_word）
+  6. OCR誤読修正（辞書ベース + 文脈依存パターン）
+  7. 空白・句読点の正規化
 
 使い方:
     from utils.text_normalizer import normalize_text, find_normalizations
@@ -25,7 +26,11 @@ import unicodedata
 import jaconv
 
 from senzen_word.kanji import convert_old_kanji
-from senzen_word.kana import convert_historical_kana, convert_katakana_particles
+from senzen_word.kana import (
+    convert_hentaigana,
+    convert_historical_kana,
+    convert_katakana_particles,
+)
 
 
 # ---------- OCR誤読 修正辞書 ----------
@@ -142,13 +147,21 @@ def normalize_text(text: str) -> str:
     実行順序:
       1. Unicode NFKC正規化
       2. 旧字体→新字体 + 異体字（senzen_word）
-      3. 半角→全角統一（jaconv）
-      4. 歴史的仮名遣い→現代仮名遣い
-      5. OCR誤読修正（辞書ベース + 文脈依存）
-      6. カタカナ助詞→ひらがな
-      7. 句読点・空白の正規化
+      3. 変体仮名→現代ひらがな（senzen_word）
+      4. 半角→全角統一（jaconv）
+      5. 歴史的仮名遣い→現代仮名遣い
+      6. OCR誤読修正（辞書ベース + 文脈依存）
+      7. カタカナ助詞→ひらがな
+      8. 句読点・空白の正規化
 
     ヘッダー行（# で始まる行）はスキップする。
+
+    変体仮名変換の位置には2つの制約がある（動かすと静かに壊れる）:
+      - 歴史的仮名遣い変換より「前」。変体仮名が生む「かう」を「こう」にする
+        のは後段の仕事なので、後ろに置くと変換を取りこぼす
+      - jaconv.normalize より「前」。変体仮名に濁音の合成済み文字は無く
+        「基字 + U+3099」で表すため、後ろに置くと濁点が分解のまま残り、
+        検索時に合成済みの「が」と一致しなくなる
 
     Args:
         text: 正規化対象のテキスト
@@ -165,16 +178,18 @@ def normalize_text(text: str) -> str:
     body = _normalize_unicode(body)
     # ② 旧字体→新字体（senzen_word）
     body = _convert_old_kanji(body)
-    # ③ 半角→全角
+    # ③ 変体仮名→現代ひらがな（senzen_word）
+    body = convert_hentaigana(body)
+    # ④ 半角→全角
     body = _normalize_width(body)
-    # ④ 歴史的仮名遣い変換（senzen_word）
+    # ⑤ 歴史的仮名遣い変換（senzen_word）
     body = convert_historical_kana(body)
-    # ⑤ OCR誤読修正
+    # ⑥ OCR誤読修正
     body = _correct_ocr_misreads(body)
     body = _correct_context_misreads(body)
-    # ⑥ カタカナ助詞→ひらがな
+    # ⑦ カタカナ助詞→ひらがな
     body = convert_katakana_particles(body)
-    # ⑦ 句読点・空白
+    # ⑧ 句読点・空白
     body = _normalize_punctuation(body)
     body = _normalize_whitespace(body)
 
@@ -192,9 +207,13 @@ def normalize_query(text: str) -> str:
     適用順序:
       ① Unicode NFKC正規化
       ② 旧字体→新字体 + 異体字（senzen_word）
-      ③ 半角→全角統一（jaconv）
-      ④ 歴史的仮名遣い→現代仮名遣い（senzen_word）
-      ⑤ カタカナ助詞→ひらがな（senzen_word）
+      ③ 変体仮名→現代ひらがな（senzen_word）
+      ④ 半角→全角統一（jaconv）
+      ⑤ 歴史的仮名遣い→現代仮名遣い（senzen_word）
+      ⑥ カタカナ助詞→ひらがな（senzen_word）
+
+    normalize_text と同じ変換列を保つこと。索引側だけに変換を足すと、
+    その文字を含むクエリが永久にヒットしなくなる。
 
     Args:
         text: 正規化対象の検索語
@@ -204,9 +223,10 @@ def normalize_query(text: str) -> str:
     """
     text = _normalize_unicode(text)          # ① NFKC
     text = _convert_old_kanji(text)          # ② 旧字体→新字体
-    text = _normalize_width(text)            # ③ 半角→全角
-    text = convert_historical_kana(text)     # ④ 歴史的仮名遣い
-    text = convert_katakana_particles(text)  # ⑤ カタカナ助詞→ひらがな
+    text = convert_hentaigana(text)          # ③ 変体仮名→現代ひらがな
+    text = _normalize_width(text)            # ④ 半角→全角
+    text = convert_historical_kana(text)     # ⑤ 歴史的仮名遣い
+    text = convert_katakana_particles(text)  # ⑥ カタカナ助詞→ひらがな
     return text
 
 

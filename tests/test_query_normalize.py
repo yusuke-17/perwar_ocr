@@ -39,6 +39,22 @@ def test_yoon_contraction_shrinks_length():
     assert normalize_query("クヮシ") == "カシ"
 
 
+def test_hentaigana_query():
+    """変体仮名クエリが現代ひらがなに変換される
+
+    U+1B002 = A-1（あ）、U+1B0ED = RA-1（ら）
+    """
+    assert normalize_query("\U0001B002\U0001B0ED") == "あら"
+
+
+def test_hentaigana_query_length_preserved():
+    """変体仮名は1文字→1文字なので、正規化で文字数が縮まない
+
+    3文字のクエリが TRIGRAM_MIN_QUERY_CHARS(=3) を割り込まないこと。
+    """
+    assert len(normalize_query("\U0001B002\U0001B0ED\U0001B002")) == 3
+
+
 # ---------- 検索との結合（取りこぼし解消の回帰テスト） ----------
 
 
@@ -65,6 +81,26 @@ def test_old_kanji_query_hits_new_kanji_index(tmp_path):
 
     # 旧字体「大日本帝國」で検索しても拾える
     hits = idx.search("大日本帝國")
+    assert len(hits) == 1
+    assert hits[0].id == "doc1"
+
+
+def test_hentaigana_query_hits_hiragana_index(tmp_path):
+    """ひらがなで索引された文書を、変体仮名で書いたクエリで検索してヒットすること
+
+    索引側（normalize_text）と検索側（normalize_query）の両方に
+    変体仮名変換が入っていないと成立しない。
+    """
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+    # インデックスには現代ひらがな「あさひ」が入っている
+    _make_doc(library_root, "doc1", "テスト文書", "あさひ新聞ノ記事")
+
+    idx = LibraryIndex(library_root)
+    idx.update()
+
+    # A-1(U+1B002) + SA-1(U+1B03C) + HI-1(U+1B0A9) の変体仮名で検索してもヒットする
+    hits = idx.search("\U0001B002\U0001B03C\U0001B0A9")
     assert len(hits) == 1
     assert hits[0].id == "doc1"
 

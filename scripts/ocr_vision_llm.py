@@ -642,6 +642,7 @@ def process_single(args: argparse.Namespace, image_path: Path) -> int:
                 ),
                 normalization=MetaNormalization(
                     old_kanji=not args.no_normalize,
+                    hentaigana=not args.no_normalize,
                     historical_kana=not args.no_normalize,
                     ocr_misread_correction=not args.no_normalize,
                 ),
@@ -760,6 +761,7 @@ def process_batch(args: argparse.Namespace, image_paths: list[Path]) -> int:
                 ),
                 normalization=MetaNormalization(
                     old_kanji=not args.no_normalize,
+                    hentaigana=not args.no_normalize,
                     historical_kana=not args.no_normalize,
                     ocr_misread_correction=not args.no_normalize,
                 ),

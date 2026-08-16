@@ -38,7 +38,11 @@ from pathlib import Path
 
 from utils.config import CONFIG
 from utils.text_normalizer import normalize_text, find_normalizations
-from senzen_word.kana import find_historical_kana, find_katakana_particles
+from senzen_word.kana import (
+    find_hentaigana,
+    find_historical_kana,
+    find_katakana_particles,
+)
 
 
 def postprocess(
@@ -100,18 +104,24 @@ def process_file(
 
     # 変換統計
     normalizations = find_normalizations(original) if normalize else []
+    hentaigana_matches = find_hentaigana(original) if normalize else []
     kana_matches = find_historical_kana(original) if normalize else []
     particle_matches = find_katakana_particles(original) if normalize else []
 
     print(f"\n  ファイル: {input_path}")
     print(f"  OCR誤読修正: {len(normalizations)}箇所")
+    print(f"  変体仮名変換: {len(hentaigana_matches)}箇所")
     print(f"  仮名変換: {len(kana_matches)}箇所")
     print(f"  カタカナ助詞変換: {len(particle_matches)}箇所")
 
-    if show_changes and (normalizations or kana_matches or particle_matches):
+    if show_changes and (
+        normalizations or hentaigana_matches or kana_matches or particle_matches
+    ):
         print("  --- 変換内容 ---")
         for old, new, pos in normalizations:
             print(f"    [{pos}] {old} → {new} (OCR誤読)")
+        for old, new, pos in hentaigana_matches:
+            print(f"    [{pos}] {old} → {new} (変体仮名)")
         for old, new, pos in kana_matches:
             print(f"    [{pos}] {old} → {new} (仮名)")
         for old, new, pos in particle_matches:
