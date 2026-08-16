@@ -19,11 +19,21 @@ modernize = "qwen3.5:9b" # 口語体変換に使うモデル
 # size = 2000            # 口語体変換の1チャンクの文字数
 # overlap = 200          # チャンク間のオーバーラップ文字数
 #
-# [llm]
+# [llm]                   # 口語体変換の生成パラメータ（そのままOllamaのoptionsに渡る）
 # temperature = 0.5      # 創造性（低いほど原文に忠実）
 # top_p = 0.9
 # top_k = 40
 # repeat_penalty = 1.1
+#
+# [ocr]                   # OCRの生成パラメータ（そのままOllamaのoptionsに渡る）
+# temperature = 0.0       # 0 = 同じ画像なら同じ結果。読み取りに創造性は不要
+# seed = 0                # サンプリングの揺らぎを固定（再現性のため）
+# repeat_penalty = 1.0    # 繰り返しを罰しない。表・数字の羅列が多い文書向け（既定は未指定）
+#                         # ※ num_predict は書かないこと。長いページの後半が無言で欠ける
+#
+# [ollama]                # Ollamaとの通信設定（生成パラメータではない）
+# generate_timeout_seconds = 300  # 生成1回の上限秒数。0で無制限（従来の挙動に戻す）
+# list_timeout_seconds = 15       # モデル一覧など軽いAPIの上限秒数
 #
 # [search]
 # limit = 20             # 検索結果の表示件数

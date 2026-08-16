@@ -706,6 +706,7 @@ name = "prewar-ocr"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx" },
     { name = "jaconv" },
     { name = "numpy" },
     { name = "ollama" },
@@ -725,6 +726,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
     { name = "jaconv", specifier = ">=0.5.0" },
     { name = "numpy", specifier = ">=2.4.2" },
     { name = "ollama", specifier = ">=0.6.1" },

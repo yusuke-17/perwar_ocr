@@ -156,6 +156,20 @@ Ctrl+C で中断した場合も、そこまでの結果は保存される。
   （OCR結果は失われない）。失敗したチャンクは原文のまま残る
 - Ollama が停止しているときなど、連続3回失敗したら残りのページを待たずに打ち切る
   （`config.toml` の `batch.abort_after_consecutive_failures` で変更可）
+- Ollama が応答しなくなったページは 300 秒でタイムアウトし、`reason: "timeout"` として
+  スキップされる（無限に待ち続けない）。`config.toml` の
+  `ollama.generate_timeout_seconds` で変更でき、`0` にすると無制限に戻せる
+
+### OCRの再現性
+
+OCR は `temperature = 0` で実行するため、同じ画像・同じモデルなら結果が安定する。
+どの設定で読み取ったかは `meta.json` の `ocr.options` に残る。
+読み取りが硬すぎると感じる場合は `config.toml` に次を書けば戻せる。
+
+```toml
+[ocr]
+temperature = 0.3
+```
 
 終了コードで結果を判別できる（スクリプトから使う場合）:
 

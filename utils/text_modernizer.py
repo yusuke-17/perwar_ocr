@@ -19,7 +19,14 @@ import time
 from dataclasses import dataclass, field
 
 from utils.config import CONFIG
-from utils.ollama_client import OllamaConnectionError, OllamaModelNotFoundError
+from utils.ollama_client import (
+    OllamaModelNotFoundError,
+    chat_client,
+    generate_timeout,
+    list_client,
+    list_timeout,
+    ollama_errors,
+)
 from utils.progress import progress_active, track
 
 # ---------- 定数 ----------
@@ -160,7 +167,7 @@ class TextModernizer:
             ModernizeResult（変換後テキスト・チャンク総数・失敗一覧・中断フラグ）
 
         Raises:
-            OllamaConnectionError / OllamaModelNotFoundError:
+            OllamaConnectionError / OllamaModelNotFoundError / OllamaTimeoutError:
                 事前のモデル存在確認に失敗した場合（1チャンクも変換できないため）
         """
         self._check_model_available()
@@ -338,48 +345,28 @@ class TextModernizer:
 
     def _modernize_chunk(self, chunk: str) -> str:
         """1チャンクをOllama APIでリライトする"""
-        import ollama
-
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         for example in FEW_SHOT_EXAMPLES:
             messages.append({"role": "user", "content": example["input"]})
             messages.append({"role": "assistant", "content": example["output"]})
         messages.append({"role": "user", "content": chunk})
 
-        try:
-            response = ollama.chat(
+        with ollama_errors(self.model, generate_timeout()):
+            response = chat_client().chat(
                 model=self.model,
                 messages=messages,
                 think=False,
-                options=CONFIG.get("llm"),
+                # コピーを渡す（渡した先で書き換えられても設定を汚さない）
+                options=dict(CONFIG.get("llm") or {}),
             )
-        except ConnectionError:
-            raise OllamaConnectionError(
-                "Ollamaサーバーに接続できません。\n"
-                "→ Ollama.app を起動してください（メニューバーにアイコンが出ます）"
-            )
-        except ollama.ResponseError as e:
-            if "not found" in str(e).lower():
-                raise OllamaModelNotFoundError(
-                    f"モデル '{self.model}' が見つかりません。\n"
-                    f"→ ollama pull {self.model} を実行してください"
-                )
-            raise
 
         return response.message.content.strip()
 
     def _check_model_available(self) -> None:
         """指定モデルがOllamaにインストール済みかチェック"""
-        import ollama
-
-        try:
-            models = ollama.list()
-            model_names = [m.model for m in models.models]
-        except ConnectionError:
-            raise OllamaConnectionError(
-                "Ollamaサーバーに接続できません。\n"
-                "→ Ollama.app を起動してください（メニューバーにアイコンが出ます）"
-            )
+        with ollama_errors(self.model, list_timeout()):
+            models = list_client().list()
+        model_names = [m.model for m in models.models]
 
         found = any(self.model in name for name in model_names)
         if not found:

@@ -42,7 +42,7 @@ uv add <package>
 - `scripts/` - 実行スクリプト（CLI）
 - `utils/` - PJ固有ユーティリティ（Ollama, OCR, LLM等）
 - `input/` / `output/` - 入出力データ（Git管理外）
-- `config.toml` - 設定の上書きファイル（モデル名/パス/チャンク/LLM/検索）。Git管理
+- `config.toml` - 設定の上書きファイル（モデル名/パス/チャンク/LLM/OCR/Ollama通信/検索）。Git管理
 - `plan/` - 実装計画
 - `survey/` - 調査レポート
 

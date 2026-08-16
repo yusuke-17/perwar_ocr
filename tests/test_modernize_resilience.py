@@ -6,6 +6,7 @@ LLM呼び出し部（_modernize_chunk）だけを差し替えたサブクラス�
 Ollama もモックライブラリも不要。
 """
 
+from utils.ollama_client import OllamaTimeoutError
 from utils.text_modernizer import ModernizeResult, TextModernizer
 
 
@@ -80,6 +81,27 @@ def test_no_character_loss_on_failure():
 
     stripped = result.text.replace("[変換済み]", "").replace("\n", "")
     assert stripped == text
+
+
+def test_timed_out_chunk_keeps_original_text():
+    """タイムアウトしたチャンクも原文のまま残り、後続は処理される（G4）
+
+    従来はここで無限ハングしていた。例外になったことで keep_original の
+    仕組みに乗り、変換済みの分も失われない。
+    """
+    m = _StubModernizer(
+        fail_at={2: OllamaTimeoutError("300 秒以内に応答しませんでした")},
+        chunk_size=10,
+    )
+    text = _text(4)
+
+    result = m.modernize_detailed(text)
+
+    assert len(result.failures) == 1
+    assert result.failures[0].index == 2
+    assert "文2アイウエオカキ。" in result.text
+    assert result.text.count("[変換済み]") == 3
+    assert m.calls == 4
 
 
 def test_on_chunk_error_abort_raises():

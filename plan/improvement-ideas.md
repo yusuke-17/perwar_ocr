@@ -75,17 +75,18 @@
 | ~~G1~~ ✅ | ~~句読点なし長文のチャンク未分割バグ~~（実装済み） | `text_modernizer.py:151-185` の `_split_text` は「。」でのみ文を切る。句読点の乏しい戦前文書では全文が1チャンクになり、`chunk_size` 超過分が qwen3.5 に渡って**無言で切り捨てられ後半が変換されない**。1文が上限超えでも分割されない。→ **対応済み**: `_split_oversized`／`_split_keep_delims` を追加し、「。」→「、」「改行」→文字数の多段フォールバック分割で全チャンクを `chunk_size` 以下に保証。強制カット時は⚠表示。回帰テスト `tests/test_text_modernizer.py`（6件）＋実LLM E2Eで欠落ゼロ確認済み。 | ★★★ | 小〜中 |
 | ~~G2~~ ✅ | ~~バッチ/複数枚OCRが1枚失敗で全件破棄~~（実装済み） | `ocr_vision_llm.py:448-456`（`--separate` も同様）。10枚中10枚目で失敗すると `return 1` で**成功済み9枚も保存されず消える**。1枚数十秒〜数分の処理で被害大。→ **対応済み**: `_ocr_pages` で失敗ページを記録して継続し、成功分だけで save まで到達。`meta.json` の `pages.skipped` に理由を残す。連続3回失敗でフェイルファスト。あわせて口語体変換のチャンク単位耐性（G2b）・Ctrl+C 中断時の保存（G2c）・前処理のページ単位フォールバック・`prewar fix` のファイル単位耐性も実装。終了コード 2（部分成功）を新設。テスト26件追加。詳細は `plan/g2-batch-failure-tolerance.md` | ★★☆ | 中 |
 | G3 | 変体仮名変換がパイプライン未接続 | `text_normalizer.py:27-28`。senzen_word 公式 `convert()` は「旧字体→変体仮名→歴史的仮名→カタカナ助詞」順で適用する設計だが、PJ側は個別関数のみ import し `convert_hentaigana` を一度も呼んでいない。テスト済み機能が死んでおり、パッケージ意図と実装が不整合。→ `normalize_text`/`normalize_query` に追加 | ★★☆ | 小 |
-| G4 | OCR呼び出しに temperature/timeout 未指定 | `ollama_client.py:160-174`。口語化側は `options` を渡すのにOCR側は無指定＝モデル既定 temperature で走り**同じ画像でも結果がぶれる**（OCRは temperature=0 が正）。全 Ollama 呼び出しに timeout が無く、固まると**無限ハング**。→ OCR用 options を config 化＋ timeout 設定 | ★★☆ | 小 |
+| ~~G4~~ ✅ | ~~OCR呼び出しに temperature/timeout 未指定~~（実装済み） | `ollama_client.py:160-174`。口語化側は `options` を渡すのにOCR側は無指定＝モデル既定 temperature で走り**同じ画像でも結果がぶれる**（OCRは temperature=0 が正）。全 Ollama 呼び出しに timeout が無く、固まると**無限ハング**。→ **対応済み**: `[ocr]`（temperature=0/seed=0）と `[ollama]`（generate 300秒 / list 15秒、0で無制限）を config 化。`ollama_client.py` に `chat_client()`／`list_client()`／`ollama_errors()` を新設し、OCR・口語化・`prewar check` の全経路を timeout 付きに統一。ollama-python が変換しない `httpx.TimeoutException` を `OllamaTimeoutError` に翻訳して `_OCR_ERROR_KINDS` に追加したことで、無応答が G2 の部分保存機構（`pages.skipped` の `reason:"timeout"`・連続失敗打ち切り）にそのまま乗る。使用パラメータは `meta.json` の `ocr.options` に記録。モデル存在確認もページごとから1回に。散在していたエラー変換4コピーを1本化。テスト21件追加 | ★★☆ | 小 |
 | G5 | 検索インデックスが口語化後テキストのみ | `library_search.py:304-307`。FTS5に入るのは modern.txt（LLMが言い換えた後）だけ。LLMが変えた語は原文の語で検索してもヒットしない。研究アーカイブの再現率を損なう。→ 正規化した原文カラムも索引に追加（C1のクエリ正規化とは別軸＝「何を索引するか」） | ★★☆ | 小〜中 |
 | G6 | 差分更新が meta.json の mtime のみ判定 | `library_search.py:108-133`。索引対象は modern.txt なのに変更検知は meta.json の mtime だけ。**modern.txt を手修正しても再インデックスされず**古い本文で検索し続ける。→ modern.txt の mtime／内容ハッシュも検知に含める | ★★☆ | 小 |
 | G7 | `process_single`／`process_batch` の大量重複 | `ocr_vision_llm.py:339-429` と `:432-534`。正規化・口語化・レコード生成がほぼ丸ごとコピペ。片方だけ直して反映漏れ→バグ温床。テストも無く回帰検知不可（E1と補完関係）。→ 共通ヘルパーに抽出し経路を1本化 | ★★☆ | 中 |
+| G9 | 口語化チャンクにもフェイルファストが無い | G4 で全 Ollama 呼び出しに timeout（既定300秒）が付いたが、`text_modernizer.py` は `keep_original` で全チャンクを試し切る。Ollama が無応答のまま50チャンクあると 300秒×50＝4時間待つ。OCR側の `batch.abort_after_consecutive_failures` と同型の `chunk.abort_after_consecutive_failures` を入れて連続失敗で打ち切る。→ G4の実装で顕在化した積み残し（従来はチャンク1で無限ハングしていたので純粋な改善ではある） | ★★☆ | 小 |
 | G8 | デッドコード・不要依存の整理 | `chunk.overlap`（config/param/コメントにあるが `_split_text` で未使用＝効くと誤解を招く）、`requests`（pyproject にあるが import 0件）、`surya-ocr`（実処理未使用の重量級必須依存）。→ overlap は実装 or 削除、requests は依存から除去、surya は optional グループへ | ★★☆ | 小 |
 
 ---
 
 ## おすすめ優先順位の叩き台
 
-実装済み: C1 / B1 / D1 / A1 / D2 / **G1** / **G2**。
+実装済み: C1 / B1 / D1 / A1 / D2 / **G1** / **G2** / **G4**。
 
 ### 第1優先：静かに壊れるバグを止める（既存機能の信頼性）
 まず「エラーにならず結果だけ欠ける」タイプを潰す。動いて見えるのに出力が劣化する
@@ -93,8 +94,8 @@
 
 1. ~~G1 句読点なし長文のチャンク未分割~~ ✅ **完了** — 多段フォールバック分割で後半欠落を根絶
 2. ~~G2 バッチ1枚失敗で全件破棄~~ ✅ **完了** — 部分成功の保存・中断耐性でデータ損失を根絶
-3. G4 OCRの temperature/timeout — 再現性の確保とハング防止（コスト小）← **次の候補**
-4. G3 変体仮名の未接続 — テスト済み機能を繋ぐだけ（コスト小）
+3. ~~G4 OCRの temperature/timeout~~ ✅ **完了** — temperature=0で再現性を確保、全Ollama呼び出しに300秒timeout
+4. G3 変体仮名の未接続 — テスト済み機能を繋ぐだけ（コスト小）← **次の候補**
 
 ### 第2優先：検索・索引の正確性
 5. G5 原文も索引に追加 — 口語化で消えた語の取りこぼしを直す

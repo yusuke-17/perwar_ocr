@@ -44,9 +44,11 @@ def check_packages():
 def check_ollama_connection():
     """Ollama サーバーが起動しているかチェック"""
     try:
-        import ollama
+        from utils.ollama_client import list_client, list_timeout, ollama_errors
 
-        models = ollama.list()
+        # timeout 付きで問い合わせる（Ollamaが固まっていても永久に待たない）
+        with ollama_errors("", list_timeout()):
+            models = list_client().list()
         model_names = [m.model for m in models.models]
         print(f"  ✓ Ollama 接続OK（{len(model_names)} モデル検出）")
         for name in model_names:
@@ -71,14 +73,21 @@ def check_glm_ocr(model_names: list[str]):
     print(f"  ✓ モデル検出: {model_name}")
 
     # テキストのみの簡易テスト（画像なし）
-    print("  → 簡易テスト実行中...")
-    try:
-        import ollama
+    # 初回はモデルのメモリロードで数十秒かかるのが普通なので、
+    # 短い専用timeoutは設けず生成用の設定を共有し、待ち上限だけ画面に出す。
+    from utils.ollama_client import chat_client, generate_timeout, ollama_errors
 
-        response = ollama.chat(
-            model=model_name,
-            messages=[{"role": "user", "content": "「東京」という漢字を読んでください。"}],
-        )
+    limit = generate_timeout()
+    suffix = f"（最大 {limit:.0f} 秒待ちます）" if limit else ""
+    print(f"  → 簡易テスト実行中...{suffix}")
+    try:
+        with ollama_errors(model_name, limit):
+            response = chat_client().chat(
+                model=model_name,
+                messages=[
+                    {"role": "user", "content": "「東京」という漢字を読んでください。"}
+                ],
+            )
         reply = response.message.content.strip()
         # 長すぎる場合は省略
         if len(reply) > 100:

@@ -49,6 +49,9 @@ class MetaOcr:
     model: str
     prompt: str
     elapsed_seconds: float
+    # 実際にOllamaへ渡した生成パラメータ（config.toml の [ocr]）。
+    # 「この記録がどの設定で作られたか」を後から追えるようにするため。
+    options: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -90,7 +93,8 @@ class MetaPageFailure:
 
     index: int  # 元の並びでの1始まりページ番号
     source: str  # 元画像のファイル名
-    reason: str  # "image" | "connection" | "model" | "unknown" | "interrupted"
+    # "image" | "connection" | "timeout" | "model" | "unknown" | "interrupted"
+    reason: str
     message: str
 
 
@@ -230,6 +234,7 @@ def save_document(
             "model": record.ocr_meta.model,
             "prompt": record.ocr_meta.prompt,
             "elapsed_seconds": round(record.ocr_meta.elapsed_seconds, 2),
+            "options": record.ocr_meta.options,
         },
         "normalization": {
             "old_kanji": record.normalization.old_kanji,

@@ -28,6 +28,15 @@ from typing import Any
 
 _DEFAULTS: dict[str, Any] = {
     "models": {"ocr": "glm-ocr", "modernize": "qwen3.5:9b"},
+    # Ollama との「通信」の設定（生成パラメータではない）。全 Ollama 呼び出しで共有する。
+    "ollama": {
+        # chat（生成）1回あたりの上限秒数。超えたら OllamaTimeoutError。
+        # ollama-python の既定は無制限なので、Ollama が固まると永久に戻らない。
+        # 0 以下にすると無制限＝従来の挙動に戻せる（退避口）。
+        "generate_timeout_seconds": 300,
+        # モデル一覧など軽いAPIの上限秒数。返らない＝サーバー異常なので短くてよい。
+        "list_timeout_seconds": 15,
+    },
     "paths": {"input": "input", "output": "output", "library": "library"},
     "chunk": {
         "size": 2000,
@@ -37,7 +46,14 @@ _DEFAULTS: dict[str, Any] = {
         #   "abort":         例外を投げて変換全体を中止（従来の挙動）
         "on_error": "keep_original",
     },
+    # 口語体変換(chat)の生成パラメータ。セクション丸ごと ollama の options= に渡る。
     "llm": {"temperature": 0.5, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.1},
+    # OCR(chat)の生成パラメータ。llm と対称で、セクション丸ごと options= に渡る。
+    # → ここには「Ollama の options として意味のあるキー」以外を足さないこと。
+    "ocr": {
+        "temperature": 0.0,  # 読み取りに創造性は不要。同じ画像なら同じ結果に寄せる
+        "seed": 0,           # 残るサンプリングの揺らぎも固定して再現性を確保する
+    },
     "search": {"limit": 20, "min_query_chars": 3},
     "diff": {"color": True, "context": 30},
     "preprocess": {

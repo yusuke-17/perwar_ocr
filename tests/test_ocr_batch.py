@@ -26,6 +26,7 @@ from utils.ollama_client import (
     ImageFileError,
     OCRResult,
     OllamaConnectionError,
+    OllamaTimeoutError,
 )
 
 
@@ -95,6 +96,32 @@ def test_middle_page_failure_continues():
         "ページ4の本文",
         "ページ5の本文",
     ]
+
+
+def test_timeout_page_is_recorded_as_timeout():
+    """無応答ページは reason="timeout" で記録され、後続は処理される（G4）
+
+    タイムアウトが「例外」になったことで、G2の部分保存機構にそのまま乗る。
+    """
+    images = _pages(3)
+    client = _FakeClient({2: OllamaTimeoutError("300 秒以内に応答しませんでした")})
+
+    outcome = _ocr_pages(client, images, images)
+
+    assert outcome.failures[0].reason == "timeout"
+    assert outcome.ok_indices == [0, 2]
+    assert len(outcome.results) == 2
+
+
+def test_consecutive_timeouts_abort():
+    """連続タイムアウトも既存の打ち切り機構で止まる（全ページ分待たない）"""
+    images = _pages(10)
+    client = _FakeClient({i: OllamaTimeoutError("無応答") for i in range(1, 11)})
+
+    outcome = _ocr_pages(client, images, images, abort_after=3)
+
+    assert outcome.aborted is True
+    assert client.calls == 3
 
 
 def test_unknown_error_is_classified():
@@ -333,6 +360,23 @@ def _saved_meta(tmp_path: Path, record: DocumentRecord) -> dict:
     """レコードを保存して meta.json を読み返す"""
     doc_dir = save_document(record, library_root=tmp_path / "library")
     return json.loads((doc_dir / "meta.json").read_text(encoding="utf-8"))
+
+
+def test_meta_records_ocr_options(tmp_path):
+    """どの生成パラメータで作られた記録かを meta.json に残す（G4）"""
+    record = _record(
+        tmp_path,
+        ocr_meta=MetaOcr(
+            model="glm-ocr",
+            prompt="p",
+            elapsed_seconds=1.0,
+            options={"temperature": 0.0, "seed": 0},
+        ),
+    )
+
+    meta = _saved_meta(tmp_path, record)
+
+    assert meta["ocr"]["options"] == {"temperature": 0.0, "seed": 0}
 
 
 def test_meta_has_no_pages_section_when_all_succeed(tmp_path):

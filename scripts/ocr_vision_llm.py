@@ -55,6 +55,7 @@ from utils.ollama_client import (
     OllamaConnectionError,
     OllamaModelNotFoundError,
     OllamaOCRClient,
+    OllamaTimeoutError,
 )
 from utils.progress import spinner
 from utils.text_normalizer import normalize_text
@@ -292,6 +293,7 @@ def _create_ocr_client(args: argparse.Namespace) -> OllamaOCRClient:
 _OCR_ERROR_KINDS: list[tuple[type[Exception], str, str]] = [
     (ImageFileError, "image", "画像エラー"),
     (OllamaConnectionError, "connection", "Ollama接続エラー"),
+    (OllamaTimeoutError, "timeout", "Ollamaタイムアウト"),
     (OllamaModelNotFoundError, "model", "モデルエラー"),
 ]
 
@@ -636,6 +638,7 @@ def process_single(args: argparse.Namespace, image_path: Path) -> int:
                     model=result.model,
                     prompt=result.prompt,
                     elapsed_seconds=result.elapsed_seconds,
+                    options=result.options,
                 ),
                 normalization=MetaNormalization(
                     old_kanji=not args.no_normalize,
@@ -753,6 +756,7 @@ def process_batch(args: argparse.Namespace, image_paths: list[Path]) -> int:
                     model=ocr_results[0].model,
                     prompt=ocr_results[0].prompt,
                     elapsed_seconds=sum(r.elapsed_seconds for r in ocr_results),
+                    options=ocr_results[0].options,
                 ),
                 normalization=MetaNormalization(
                     old_kanji=not args.no_normalize,
