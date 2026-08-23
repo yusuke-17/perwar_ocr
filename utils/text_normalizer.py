@@ -10,6 +10,11 @@ OCR出力テキストに対して、以下の正規化を一括で行う:
   6. OCR誤読修正（辞書ベース + 文脈依存パターン）
   7. 空白・句読点の正規化
 
+【重要】変換規則を変えたら utils/library_search.py の INDEX_SCHEMA_VERSION を上げること。
+検索インデックスには normalize_text() を通した結果（正規化済み原文・題名）が
+保存されている。規則だけ変えると古い規則で作られた索引が残り、
+新しい規則で正規化されたクエリと噛み合わなくなる。版を上げれば自動で全件再構築される。
+
 使い方:
     from utils.text_normalizer import normalize_text, find_normalizations
 

@@ -166,7 +166,7 @@ def cmd_find(args: argparse.Namespace) -> int:
         except ValueError:
             dir_display = str(h.dir)
         print(f"  場所: {dir_display}/")
-        print(f"  抜粋: {h.snippet}")
+        print(f"  抜粋: {h.snippet}{_matched_note(h)}")
         print(f"  作成: {h.created_at}")
         print()
 
@@ -210,9 +210,21 @@ def _print_stats(stats: IndexStats) -> None:
     print(f"  スキップ: {stats.skipped}件")
 
 
+def _matched_note(hit: SearchHit) -> str:
+    """原文にのみ一致した場合の注記
+
+    口語化で語が言い換えられた箇所に当たったことを示す。史料調査では
+    「どの語が現代語に置き換わったか」自体が手がかりになるため明示する。
+    """
+    if "original" in hit.matched_fields and "modern" not in hit.matched_fields:
+        return "  ← 原文のみ一致：口語化で語が変わっています"
+    return ""
+
+
 def _hit_to_dict(hit: SearchHit) -> dict:
     d = asdict(hit)
     d["dir"] = str(hit.dir)
+    d["matched_fields"] = list(hit.matched_fields)  # asdict は tuple のまま返す
     return d
 
 

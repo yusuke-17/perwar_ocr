@@ -1,6 +1,6 @@
 # prewar-ocr 改善案リスト
 
-最終更新: 2026-07-04（G1完了）
+最終更新: 2026-08-24（G5・G6完了。G10を新規追加）
 
 現状調査（CLI/全体・OCRパイプライン・検索/ライブラリ）を踏まえた「あったら良さそうな実装案」。
 採用 → 優先順位付け → 設計、の叩き台として使う。
@@ -76,17 +76,18 @@
 | ~~G2~~ ✅ | ~~バッチ/複数枚OCRが1枚失敗で全件破棄~~（実装済み） | `ocr_vision_llm.py:448-456`（`--separate` も同様）。10枚中10枚目で失敗すると `return 1` で**成功済み9枚も保存されず消える**。1枚数十秒〜数分の処理で被害大。→ **対応済み**: `_ocr_pages` で失敗ページを記録して継続し、成功分だけで save まで到達。`meta.json` の `pages.skipped` に理由を残す。連続3回失敗でフェイルファスト。あわせて口語体変換のチャンク単位耐性（G2b）・Ctrl+C 中断時の保存（G2c）・前処理のページ単位フォールバック・`prewar fix` のファイル単位耐性も実装。終了コード 2（部分成功）を新設。テスト26件追加。詳細は `plan/g2-batch-failure-tolerance.md` | ★★☆ | 中 |
 | ~~G3~~ ✅ | ~~変体仮名変換がパイプライン未接続~~（実装済み） | `text_normalizer.py:27-28`。senzen_word 公式 `convert()` は「旧字体→変体仮名→歴史的仮名→カタカナ助詞」順で適用する設計だが、PJ側は個別関数のみ import し `convert_hentaigana` を一度も呼んでいなかった。→ **対応済み。ただし「繋ぐだけ」では済まなかった**: 調査で `hentaigana.json` 自体が壊れていることが判明した。Python標準 `unicodedata` の正式名と全件照合したところ **260件中257件が誤変換**（1音あたりの異体字数を実際のUnicode配置と違う数で割り当てたため先頭からズレが蓄積）、**「ら・り・る・れ」行の25字がまるごと欠落**、変換先に「あ・ゐ・ゑ」が一度も現れない状態だった。原因はテストのコメント `U+1B002 = HENTAIGANA LETTER A-I` — 実際は `A-1`（通し番号）であり、これを「あい」と誤読した結果**バグをそのまま正解としてアサートするテスト**になっていた。対応: ①`tools/gen_hentaigana.py` を新設し `unicodedata` の正式名から285字を機械生成（手作業の余地を排除）②ローダーが不正データを黙って捨てる挙動を `ValueError` に変更 ③`test_table_matches_unicode_names` でドリフトを検知 ④`normalize_text`/`normalize_query` に接続。**接続位置には2つの制約**があり、歴史的仮名遣い変換より前（「かう→こう」を発火させるため）かつ `jaconv.normalize` より前（濁点 `基字+U+3099` を合成させるため。後ろだと分解形が索引に残り検索が一致しない）。senzen_word 0.2.0。テスト29件追加（計167件）| ★★☆ | 小→中 |
 | ~~G4~~ ✅ | ~~OCR呼び出しに temperature/timeout 未指定~~（実装済み） | `ollama_client.py:160-174`。口語化側は `options` を渡すのにOCR側は無指定＝モデル既定 temperature で走り**同じ画像でも結果がぶれる**（OCRは temperature=0 が正）。全 Ollama 呼び出しに timeout が無く、固まると**無限ハング**。→ **対応済み**: `[ocr]`（temperature=0/seed=0）と `[ollama]`（generate 300秒 / list 15秒、0で無制限）を config 化。`ollama_client.py` に `chat_client()`／`list_client()`／`ollama_errors()` を新設し、OCR・口語化・`prewar check` の全経路を timeout 付きに統一。ollama-python が変換しない `httpx.TimeoutException` を `OllamaTimeoutError` に翻訳して `_OCR_ERROR_KINDS` に追加したことで、無応答が G2 の部分保存機構（`pages.skipped` の `reason:"timeout"`・連続失敗打ち切り）にそのまま乗る。使用パラメータは `meta.json` の `ocr.options` に記録。モデル存在確認もページごとから1回に。散在していたエラー変換4コピーを1本化。テスト21件追加 | ★★☆ | 小 |
-| G5 | 検索インデックスが口語化後テキストのみ | `library_search.py:304-307`。FTS5に入るのは modern.txt（LLMが言い換えた後）だけ。LLMが変えた語は原文の語で検索してもヒットしない。研究アーカイブの再現率を損なう。→ 正規化した原文カラムも索引に追加（C1のクエリ正規化とは別軸＝「何を索引するか」） | ★★☆ | 小〜中 |
-| G6 | 差分更新が meta.json の mtime のみ判定 | `library_search.py:108-133`。索引対象は modern.txt なのに変更検知は meta.json の mtime だけ。**modern.txt を手修正しても再インデックスされず**古い本文で検索し続ける。→ modern.txt の mtime／内容ハッシュも検知に含める | ★★☆ | 小 |
+| ~~G5~~ ✅ | ~~検索インデックスが口語化後テキストのみ~~（実装済み） | `library_search.py:304-307`。FTS5に入るのは modern.txt（LLMが言い換えた後）だけ。LLMが変えた語は原文の語で検索してもヒットしない。研究アーカイブの再現率を損なう。→ **対応済み**: FTS に `original` カラムを追加し、`normalize_text(ocr_raw.txt)` を索引。正規化後テキストはファイル保存されていないため索引時に再計算する（`diff_viewer.py` と同じ手法。決定的・外部依存なし・既存文書に遡って効く）。あわせて FTS の `title` にも正規化を適用（表示用の題名は生のまま保持）。スニペットを `snippet(search, -1, ...)` にして**実際に一致したカラム**から抜粋し、`highlight()` のマーカ有無で `matched_fields` を判定。「原文のみ一致＝口語化で語が変わった箇所」を CLI とJSONに出す。実測: DBサイズ 1.57倍・全件再構築 0.5ms/件。詳細は `openspec/changes/search-index-original-text/` | ★★☆ | 小〜中 |
+| ~~G6~~ ✅ | ~~差分更新が meta.json の mtime のみ判定~~（実装済み） | `library_search.py:108-133`。索引対象は modern.txt なのに変更検知は meta.json の mtime だけ。**modern.txt を手修正しても再インデックスされず**古い本文で検索し続ける。→ **対応済み**: `meta.json` / `modern.txt` / `ocr_raw.txt` の mtime を連結した署名文字列（`source_sig`）の**一致比較**に置き換え。最大mtime比較ではなく文字列一致にしたのは、ファイルを古い版に戻したとき（mtimeが小さくなるとき）も検知するため。G5で索引スキーマが変わるタイミングに相乗りして再構築1回で済ませた | ★★☆ | 小 |
 | G7 | `process_single`／`process_batch` の大量重複 | `ocr_vision_llm.py:339-429` と `:432-534`。正規化・口語化・レコード生成がほぼ丸ごとコピペ。片方だけ直して反映漏れ→バグ温床。テストも無く回帰検知不可（E1と補完関係）。→ 共通ヘルパーに抽出し経路を1本化 | ★★☆ | 中 |
 | G9 | 口語化チャンクにもフェイルファストが無い | G4 で全 Ollama 呼び出しに timeout（既定300秒）が付いたが、`text_modernizer.py` は `keep_original` で全チャンクを試し切る。Ollama が無応答のまま50チャンクあると 300秒×50＝4時間待つ。OCR側の `batch.abort_after_consecutive_failures` と同型の `chunk.abort_after_consecutive_failures` を入れて連続失敗で打ち切る。→ G4の実装で顕在化した積み残し（従来はチャンク1で無限ハングしていたので純粋な改善ではある） | ★★☆ | 小 |
+| G10 | 旧字体変換表に穴がある（「內」→「内」等が未変換） | G5 の実装中に発見。`senzen_word.kanji.convert_old_kanji` は「關→関」「錄→録」「當→当」は変換するが、**「內」U+5167 →「内」U+5185 を変換しない**。旧字体の題名・本文が現代表記のクエリで引けない箇所が残る（G3で変体仮名表を機械生成で修復したのと同型の問題）。→ Unicode の異体字データや JIS の新旧字体対応表と全件照合し、`tools/gen_hentaigana.py` と同じく**機械生成**で穴を塞ぐ。手作業で1字ずつ足すと同じ穴が再発する。変換表を変えたら `library_search.INDEX_SCHEMA_VERSION` を上げること（索引の作り直しが要る） | ★★☆ | 中 |
 | G8 | デッドコード・不要依存の整理 | `chunk.overlap`（config/param/コメントにあるが `_split_text` で未使用＝効くと誤解を招く）、`requests`（pyproject にあるが import 0件）、`surya-ocr`（実処理未使用の重量級必須依存）。→ overlap は実装 or 削除、requests は依存から除去、surya は optional グループへ | ★★☆ | 小 |
 
 ---
 
 ## おすすめ優先順位の叩き台
 
-実装済み: C1 / B1 / D1 / A1 / D2 / **G1** / **G2** / **G3** / **G4**。
+実装済み: C1 / B1 / D1 / A1 / D2 / **G1** / **G2** / **G3** / **G4** / **G5** / **G6**。
 
 ### 第1優先：静かに壊れるバグを止める（既存機能の信頼性）
 まず「エラーにならず結果だけ欠ける」タイプを潰す。動いて見えるのに出力が劣化する
@@ -98,9 +99,11 @@
 4. ~~G3 変体仮名の未接続~~ ✅ **完了** — 接続に加え、壊れていた変換テーブル（257/260誤り・25字欠落）を修復
 
 ### 第2優先：検索・索引の正確性
-5. G5 原文も索引に追加 — 口語化で消えた語の取りこぼしを直す ← **次の候補**
-6. G6 modern.txt 手修正の再索引 — 誤記録修正が検索に反映される
-7. C2 OR/NOT検索・C3 スニペット改善 — FTS5機能の素直な公開でUX向上
+5. ~~G5 原文も索引に追加~~ ✅ **完了** — 口語化で消えた語の取りこぼしを根絶。一致カラムも提示
+6. ~~G6 modern.txt 手修正の再索引~~ ✅ **完了** — 索引入力3ファイルの mtime 署名で検知
+7. C2 OR/NOT検索・C3 スニペット改善 — FTS5機能の素直な公開でUX向上 ← **次の候補**
+   （C3 のスニペットは G5 で「一致カラムから自動選択」まで済んだので、
+   残りは ANSIカラー化・長さ可変・スコア表示）
 
 ### 第3優先：保守性の土台（以降の改修を安全に）
 8. G7 process_single/batch の重複解消 ＋ E1 CLIテスト整備 — セットで安全網を作る
