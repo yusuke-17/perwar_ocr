@@ -5,7 +5,33 @@ context: |
   All artifacts must be written in 日本語.
   Keep OpenSpec structural headings and SHALL/MUST keywords in English.
 
+  プロジェクト: 戦前の日本語公文書（JACAR資料等）をOCRで読み取り、現代日本語に変換するツール。
+  基幹パイプライン: 画像 → GLM-OCR → senzen_word正規化 → qwen3.5口語化 → library保存 → FTS5全文検索
+
+  技術スタック: Python 3.13+ / uv。Python実行は必ず `uv run` 経由。
+  OCR: Ollama + GLM-OCR（メイン・0.9B）/ Surya OCR（補助・比較用）。LLM: qwen3.5:9b（Ollama経由）。
+  テスト: `uv run pytest tests/ pkg/`
+
+  【絶対制約】完全ローカル実行:
+  input/ output/ library/ の資料を外部API・クラウドサービスへ送信することを禁止する。
+  クラウドOCR、クラウドLLM、資料内容を含む外部通信を伴う案は提案しないこと。
+  NVIDIA GPUなし（NDLOCR ver.2等のGPU前提ツールは選択肢に入らない）。
+
+  【絶対制約】pkg/senzen_word/ は外部依存ゼロ:
+  PyPI公開用の独立パッケージであり、Ollama・jaconv等に依存させてはならない。
+  PJ固有コードは utils/、CLIは scripts/、文字変換は pkg/senzen_word/ に置く。
+
+  設定値: コードに直書きせず config.toml で管理。
+  デフォルトの正解は utils/config.py の `_DEFAULTS`、config.toml は差分のみ。
+
+  コード規約: 既存パターンに従う（argparse CLI、dataclass、カスタム例外クラス）。
+  日本語コメント・docstring。ファイルパスは pathlib.Path。
+
 # Per-artifact rules (optional)
+rules:
+  specs:
+    - 対象文書の性質（旧字体・カタカナ仮名遣い・歴史的仮名遣い・右横書き）を前提に受入条件を書くこと
+
 # Add custom rules for specific artifacts.
 # Example:
 #   rules:
