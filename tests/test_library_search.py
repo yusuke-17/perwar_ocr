@@ -13,7 +13,14 @@ import sqlite3
 
 import pytest
 
-from utils.library_search import LibraryIndex, QueryTooShortError
+from utils.library_search import (
+    MARK_CLOSE,
+    MARK_OPEN,
+    SNIPPET_MAX_CHARS,
+    LibraryIndex,
+    QuerySyntaxError,
+    QueryTooShortError,
+)
 
 # ---------- フィクスチャ・ヘルパー ----------
 
@@ -399,7 +406,7 @@ def test_matched_fields_original_only(library):
     idx.update()
     (hit,) = idx.search("罹災者")
     assert hit.matched_fields == ("original",)
-    assert "[罹災者]" in hit.snippet
+    assert f"{MARK_OPEN}罹災者{MARK_CLOSE}" in hit.snippet
 
 
 def test_matched_fields_modern(library):
@@ -408,7 +415,7 @@ def test_matched_fields_modern(library):
     idx.update()
     (hit,) = idx.search("被災者")
     assert hit.matched_fields == ("modern",)
-    assert "[被災者]" in hit.snippet
+    assert f"{MARK_OPEN}被災者{MARK_CLOSE}" in hit.snippet
 
 
 def test_matched_fields_both(library):
@@ -419,13 +426,258 @@ def test_matched_fields_both(library):
     assert set(hit.matched_fields) >= {"modern", "original"}
 
 
-def test_snippet_markers_are_not_leaked(library):
-    """一致判定に使う制御文字が抜粋に混入しない"""
+def test_snippet_uses_neutral_markers_not_display_symbols(library):
+    """抜粋に表示用の記号（角括弧）を埋め込まない"""
     idx = LibraryIndex(library)
     idx.update()
     (hit,) = idx.search("罹災者")
-    assert "\x02" not in hit.snippet
-    assert "\x03" not in hit.snippet
+    assert "[" not in hit.snippet
+    assert "]" not in hit.snippet
+
+
+# ---------- 抜粋の長さ ----------
+
+
+def test_snippet_length_is_configurable(library):
+    """抜粋長を広げると一致箇所の前後がより広く含まれる"""
+    root = library / "2026-01-01_test"
+    (root / "modern.txt").write_text(
+        "前置きの文章がここに長々と続きます。" * 5 + "被災者の記録。" + "後書きも長々と続きます。" * 5,
+        encoding="utf-8",
+    )
+    touch(root / "modern.txt")
+
+    idx = LibraryIndex(library)
+    idx.update()
+
+    short = idx.search("被災者", snippet_chars=8)[0].snippet
+    long = idx.search("被災者", snippet_chars=64)[0].snippet
+    assert len(long) > len(short)
+    assert "被災者" in short and "被災者" in long
+
+
+def test_snippet_length_is_clamped_to_max(library):
+    """上限を超える指定は上限に丸められ、検索自体は成功する"""
+    idx = LibraryIndex(library)
+    idx.update()
+
+    at_max = idx.search("被災者", snippet_chars=SNIPPET_MAX_CHARS)[0].snippet
+    over_max = idx.search("被災者", snippet_chars=SNIPPET_MAX_CHARS * 10)[0].snippet
+    assert over_max == at_max
+
+
+def test_snippet_length_zero_is_rejected(library):
+    idx = LibraryIndex(library)
+    idx.update()
+    with pytest.raises(ValueError):
+        idx.search("被災者", snippet_chars=0)
+
+
+def test_snippet_length_negative_is_rejected(library):
+    idx = LibraryIndex(library)
+    idx.update()
+    with pytest.raises(ValueError):
+        idx.search("被災者", snippet_chars=-1)
+
+
+def test_snippet_length_defaults_from_config(library):
+    """指定なしなら設定の既定値が使われる"""
+    from utils.config import CONFIG
+
+    idx = LibraryIndex(library)
+    idx.update()
+    assert idx.search("被災者")[0].snippet == (
+        idx.search("被災者", snippet_chars=CONFIG.get("search.snippet_chars"))[0].snippet
+    )
+
+
+# ---------- 一致の量 ----------
+
+
+def test_match_counts_count_occurrences(tmp_path):
+    """同一対象に複数回一致したら回数が載る"""
+    root = tmp_path / "library"
+    root.mkdir()
+    make_doc(
+        root,
+        "2026-01-01_counts",
+        title="あいうえお",
+        modern="警察署が誘導。警察署は三箇所。警察署長も出動。",
+        ocr_raw="警察署ガ誘導セリ",
+    )
+
+    idx = LibraryIndex(root)
+    idx.update()
+    (hit,) = idx.search("警察署")
+    assert hit.match_counts["modern"] == 3
+    assert hit.match_counts["original"] == 1
+    assert hit.match_counts["title"] == 0
+
+
+def test_match_counts_are_zero_for_unmatched_fields(library):
+    """一致しなかった対象の回数は零"""
+    idx = LibraryIndex(library)
+    idx.update()
+    (hit,) = idx.search("罹災者")
+    assert hit.match_counts["title"] == 0
+    assert hit.match_counts["modern"] == 0
+    assert hit.match_counts["original"] > 0
+
+
+def test_matched_fields_are_derived_from_counts(library):
+    """matched_fields は一致回数が1以上の対象と一致する"""
+    idx = LibraryIndex(library)
+    idx.update()
+    for hit in idx.search("被災者"):
+        expected = tuple(
+            name for name, count in hit.match_counts.items() if count > 0
+        )
+        assert set(hit.matched_fields) == set(expected)
+
+
+# ---------- OR / NOT / 対象の限定（索引を通した確認） ----------
+
+
+@pytest.fixture
+def multi_library(tmp_path):
+    """旧字体の原文を含む3件のライブラリ"""
+    root = tmp_path / "library"
+    root.mkdir()
+    make_doc(
+        root,
+        "2026-01-01_kanto",
+        title="關東大震災ノ記錄",
+        modern="関東地方の大地震で被災者が多数出た。警察署が誘導した。",
+        ocr_raw="關東地方ノ大地震ニテ罹災者多數警察署ガ誘導セリ",
+    )
+    make_doc(
+        root,
+        "2026-01-02_osaka",
+        title="大阪府ノ報告",
+        modern="大阪府下の警察署は治安維持に努めた。",
+        ocr_raw="大阪府下ノ警察署ハ治安維持ニ努メタリ",
+    )
+    make_doc(
+        root,
+        "2026-01-03_yokohama",
+        title="橫濱港ノ状況",
+        modern="横浜港は壊滅的な被害を受けた。",
+        ocr_raw="橫濱港ハ壞滅的被害ヲ受ク",
+    )
+    return root
+
+
+def ids(hits):
+    return {h.id for h in hits}
+
+
+def test_or_finds_either_term(multi_library):
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    assert ids(idx.search("関東地方 OR 大阪府下")) == {
+        "2026-01-01_kanto",
+        "2026-01-02_osaka",
+    }
+
+
+def test_or_absorbs_old_kanji_in_originals(multi_library):
+    """旧字体の原文でも現代表記の OR 検索で引ける"""
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    assert ids(idx.search("関東地方 OR 横浜港")) == {
+        "2026-01-01_kanto",
+        "2026-01-03_yokohama",
+    }
+
+
+def test_and_is_default(multi_library):
+    """OR を書かなければ従来どおり AND"""
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    assert ids(idx.search("関東地方 大阪府下")) == set()
+
+
+def test_not_excludes_document(multi_library):
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    assert ids(idx.search("警察署 NOT 大阪府下")) == {"2026-01-01_kanto"}
+
+
+def test_not_excludes_by_original_only_term(multi_library):
+    """原文にしか無い語でも除外できる（口語化後は「被災者」）"""
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    assert ids(idx.search("警察署 NOT 罹災者")) == {"2026-01-02_osaka"}
+
+
+def test_not_excludes_old_kanji_original_with_modern_query(multi_library):
+    """旧字体の原文を現代表記の除外語で取り除ける"""
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    # 除外語「横浜港」は yokohama の原文に旧字体「橫濱港」としてしかない
+    assert ids(idx.search("壊滅的 OR 警察署 NOT 横浜港")) == {
+        "2026-01-01_kanto",
+        "2026-01-02_osaka",
+    }
+
+
+def test_multiple_excludes_remove_any_match(multi_library):
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    assert ids(idx.search("警察署 OR 横浜港 NOT 大阪府下 横浜港")) == {
+        "2026-01-01_kanto"
+    }
+
+
+def test_field_limit_to_original(multi_library):
+    """原文に限定：口語化で消えた語を狙う"""
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    assert ids(idx.search("原文:罹災者")) == {"2026-01-01_kanto"}
+
+
+def test_field_limit_excludes_modern_only_term(multi_library):
+    """限定した対象に無い語は一致しない"""
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    assert idx.search("原文:被災者") == []
+
+
+def test_field_limit_to_title_with_old_kanji(multi_library):
+    """旧字体の題名を現代表記＋題名限定で引ける。表示は生のまま"""
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    (hit,) = idx.search("題名:関東大震災")
+    assert hit.id == "2026-01-01_kanto"
+    assert hit.title == "關東大震災ノ記錄"
+
+
+def test_field_limit_combines_with_plain_term(multi_library):
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    assert ids(idx.search("原文:罹災者 被災者")) == {"2026-01-01_kanto"}
+    assert idx.search("原文:罹災者 大阪府下") == []
+
+
+def test_excludes_only_query_is_rejected(multi_library):
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    with pytest.raises(QuerySyntaxError):
+        idx.search("NOT 大阪府下")
+
+
+def test_unknown_field_is_rejected(multi_library):
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    with pytest.raises(QuerySyntaxError):
+        idx.search("body:関東地方")
+
+
+def test_short_exclude_term_is_rejected(multi_library):
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    with pytest.raises(QueryTooShortError, match="除外語"):
+        idx.search("警察署 NOT 大阪")
 
 
 # ---------- 索引形式の移行 ----------
@@ -535,6 +787,41 @@ def test_no_rebuild_when_version_matches(library, capsys):
 
     idx.search("被災者")
     assert "再構築" not in capsys.readouterr().out
+
+
+def test_schema_version_unchanged_by_query_expression_change(library):
+    """クエリ構文の拡張は索引に触れないので版は据え置き（作り直しを起こさない）"""
+    from utils.library_search import INDEX_SCHEMA_VERSION
+
+    assert INDEX_SCHEMA_VERSION == 2
+
+
+def test_existing_index_serves_new_query_syntax_without_rebuild(multi_library, capsys):
+    """既存の索引DBを作り直さずに OR / NOT / 限定が動く"""
+    idx = LibraryIndex(multi_library)
+    idx.update()
+    db_mtime = idx.db_path.stat().st_mtime
+    capsys.readouterr()
+
+    assert ids(idx.search("関東地方 OR 大阪府下")) == {
+        "2026-01-01_kanto",
+        "2026-01-02_osaka",
+    }
+    assert ids(idx.search("原文:罹災者")) == {"2026-01-01_kanto"}
+
+    assert "再構築" not in capsys.readouterr().out
+    assert idx.db_path.stat().st_mtime == db_mtime
+
+
+def test_and_search_results_and_order_are_stable(multi_library):
+    """空白区切りの AND 検索は従来どおりの結果・並び順（bm25順で決定的）"""
+    idx = LibraryIndex(multi_library)
+    idx.update()
+
+    first = [h.id for h in idx.search("警察署")]
+    second = [h.id for h in idx.search("警察署")]
+    assert first == second
+    assert set(first) == {"2026-01-01_kanto", "2026-01-02_osaka"}
 
 
 def test_index_db_is_created_under_dot_index(library):

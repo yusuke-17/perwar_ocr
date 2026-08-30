@@ -3,7 +3,7 @@
 戦前日本語OCRツールの作業ログ。会話が長引いて記憶が飛んでも、
 このファイルを読めば「今どこまで出来ていて、次に何をするか」が分かる状態を保つ。
 
-最終更新: 2026-08-11（G2 完了）
+最終更新: 2026-08-31（C2/C3 検索クエリの表現力 完了）
 
 ---
 
@@ -17,43 +17,51 @@
 
 - 完全ローカル実行（外部送信ゼロ）を達成
 - 統合CLI `prewar` に全機能を集約（引数なしで対話メニュー）
-- テスト: 本体60件 + senzen_word 65件 = **125件**（`uv run pytest tests/ pkg/`）
+- テスト: 本体228件 + senzen_word 73件 = **301件**（`uv run pytest tests/ pkg/`）
 
-いま取り組んでいるのは `plan/improvement-ideas.md` の **G系（コード品質・堅牢性）**。
-「エラーにならず結果だけ静かに欠ける」バグを優先的に潰している。
+G系（コード品質・堅牢性）の「静かに壊れる」バグと索引の正確性を潰し終え、
+検索の使い勝手（C系）を上げる段階に入った。
 
 ---
 
-## 2. 直近の作業（2026-08-11）: G2 失敗耐性
+## 2. 直近の作業（2026-08-31）: C2/C3 検索クエリの表現力
 
-**問題**: 「最後の `save_document()` に到達しないと中間成果物が1バイトも残らない」構造で、
-1枚（1チャンク）の失敗が数十分ぶんの処理結果を丸ごと消していた。
+**問題**: 検索がスペース区切りの AND だけで、「いずれかを含む」「これを除く」
+「原文にだけ残る語を狙う」が書けなかった。抜粋も16文字固定・`[ ]` の括弧強調で、
+その括弧が JSON 出力にまで混入していた。
 
-**やったこと**（設計と詳細は `plan/g2-batch-failure-tolerance.md`）
+**やったこと**（設計と詳細は `openspec/changes/search-query-expression/`）
 
 | 対応 | 実装場所 |
 |---|---|
-| ページ失敗をスキップして継続、成功分だけで保存 | `scripts/ocr_vision_llm.py` `_ocr_pages` / `BatchOcrOutcome` |
-| 失敗理由の分類（image/connection/model/unknown/interrupted） | 同 `_run_ocr_page` / `_OCR_ERROR_KINDS` |
-| 連続3回失敗でフェイルファスト（Ollama停止時に全ページ待たない） | 同 `_ocr_pages(abort_after=...)` |
-| 口語化のチャンク単位耐性（失敗チャンクは原文のまま採用） | `utils/text_modernizer.py` `modernize_detailed` |
-| 口語化が丸ごと失敗しても正規化テキストで保存 | `scripts/ocr_vision_llm.py` `_run_modernize` |
-| Ctrl+C でも成功分を保存 | OCRループ / チャンクループ / `--separate` ループ |
-| 前処理の**ページ単位**フォールバック（1枚失敗で全ページ分を捨てていた） | 同 `_preprocess_images` |
-| `prewar fix` のファイル単位耐性 | `scripts/postprocess.py` `run()` |
-| 終了コード規約 0/2/1 の新設 | 各 `run()` / README |
+| `OR` / `NOT` / `原文:語` を解釈するクエリ解析 | `utils/library_search.py` `parse_query` / `build_match_expr` |
+| 抜粋長の可変化（`--snippet`、既定40・上限64） | 同 `search(snippet_chars=...)` |
+| 強調マーカ（制御文字）と表示の分離 | 同 `split_marked` ／ `scripts/library.py` `_render_snippet` |
+| 一致箇所数の取得（SQL内でマーカを数える） | 同 `SearchHit.match_counts` |
+| 色判定の共通化（`--no-color`/`NO_COLOR`/設定/非tty） | `utils/terminal.py`（新設。`diff_viewer` も移行） |
 
-**終了コード**: `0`=全成功 / `2`=一部欠けたが保存済み / `1`=保存物なし
+**検索構文**（利用者に見せるのはこれだけ。FTS5 の演算子優先順位は隠す）
 
-**meta.json の追加キー**（問題があったときだけ出る。正常時は従来と同形）
-```json
-"pages": { "total": 10, "succeeded": 9, "aborted": false,
-           "skipped": [{"index":10,"source":"p010.png","reason":"connection","message":"..."}] },
-"modernize": { "enabled": true, "model": "qwen3.5:9b", "failed_chunks": 2, "chunk_total": 37 }
+```
+語 語        すべてを含む（AND）
+語 OR 語     いずれかを含む（OR が1つでもあれば語群全体が OR）
+語 NOT 語    NOT 以降を除外（除外語が複数ならそのいずれか）
+原文:語      一致対象を限定（原文/口語/題名、全角コロン可）
 ```
 
-**実機確認済み**（glm-ocr / qwen3.5:9b）: 壊れ画像混在 → 成功分保存・exit 2 ／
-全滅 → 3枚目で打ち切り・exit 1 ／ `prewar fix` 不正エンコード混在 → 他は変換完了・exit 2
+**設計上の判断**（実測に基づく）
+
+- 除外は `-大阪` ではなく `NOT 大阪`。argparse の `nargs="+"` が `-` 始まりの語を
+  未知オプションとして飲み込むため
+- bm25 の生値は表示しない。200件コーパスで196件ヒット時に最良・最悪とも -0.000 に
+  潰れて序列にならないため。代わりに一致箇所数を出す
+- **日付・タグのファセットは見送り**。`created_at` は OCR 処理日であって資料の年代ではなく、
+  「大正十二年の資料に絞る」には資料年代の獲得手段の設計が別途要る
+
+**索引は不変**（`INDEX_SCHEMA_VERSION` 据え置き）。既存ライブラリの再構築は起きない。
+
+**破壊的変更**: `--format json` の `snippet` から `[ ]` が消え、一致位置は
+`snippet_highlights` に分離。`match_counts` を追加。
 
 ---
 
@@ -70,6 +78,8 @@
 | 2026-08-11 | **G2**（失敗耐性・部分成功の保存・中断耐性） | 上記セクション2 |
 | 2026-08-16 | **G4**（OCRの temperature=0 で再現性確保・全Ollama呼び出しに300秒timeout） | `utils/ollama_client.py`, `config.toml` |
 | 2026-08-16 | **G3**（変体仮名変換をパイプラインに接続。あわせて**壊れていた変換テーブルを修復**） | `utils/text_normalizer.py`, `pkg/senzen_word/` |
+| 2026-08-24 | **G5/G6**（正規化済み原文も索引に追加・索引入力3ファイルの mtime 署名で変更検知） | `openspec/changes/search-index-original-text/` |
+| 2026-08-31 | **C2/C3**（OR/NOT/対象限定の検索構文・抜粋の可変長と色分離・一致箇所数） | 上記セクション2 |
 
 ---
 
@@ -77,11 +87,16 @@
 
 `plan/improvement-ideas.md` の優先順位に従う。
 
-1. **G5 検索インデックスが口語化後テキストのみ / G6 差分更新が meta.json の mtime のみ** ← 次の候補
-2. G7 `process_single`/`process_batch` の重複解消（G2で `_run_ocr_page` / `_run_modernize` を
-   共用化したので下地はできている）＋ E1 CLIテスト整備
+1. **G7 `process_single`/`process_batch` の重複解消 ＋ E1 CLIテスト整備** ← 次の候補
+   （G2で `_run_ocr_page` / `_run_modernize` を共用化したので下地はできている）
+2. G8 デッドコード・不要依存の整理（`chunk.overlap` 未使用 / `requests` 不使用 / surya は optional へ）
 3. G9 口語化チャンクのフェイルファスト（G4で顕在化。無応答が続くと 300秒×チャンク数 待つ）
-4. 本丸: F1 チャット要約（ローカルRAG）→ F2 セマンティック検索 → F3 出典付き回答
+4. G10 旧字体変換表の穴（「內」→「内」等）を機械生成で塞ぐ
+5. 本丸: F1 チャット要約（ローカルRAG）→ F2 セマンティック検索 → F3 出典付き回答
+
+C4（タグ付けのCLI編集）は、C2で見送った**タグ・日付ファセット**の前提になる。
+日付ファセットは「資料の年代」をどう得るか（本文からの和暦抽出？手入力？）の
+設計が別途必要で、単独の変更として扱う。
 
 ### 保留メモ
 - glm-ocr が画像によって同じ行を延々と繰り返す出力をすることがある（モデル側のループ）。

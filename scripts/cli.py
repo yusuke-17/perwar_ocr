@@ -10,7 +10,7 @@
     uv run prewar                      # 対話メニュー
     uv run prewar ocr input/画像.png    # OCR（画像→現代語）
     uv run prewar shoot                # 範囲スクショ撮りため（macOS）
-    uv run prewar search 関東 震災      # ライブラリ全文検索
+    uv run prewar search 関東地方 震災被害  # ライブラリ全文検索
     uv run prewar index --rebuild       # 検索インデックス再構築
     uv run prewar stat                 # ライブラリ統計
     uv run prewar fix output/x.txt      # テキスト後処理（正規化/口語体化）
@@ -74,7 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
   uv run prewar                      # 対話メニュー（おすすめ）
   uv run prewar ocr input/画像.png    # OCR（画像→現代語）
   uv run prewar shoot                # 範囲スクショ撮りため（macOS）
-  uv run prewar search 関東 震災      # ライブラリ全文検索
+  uv run prewar search 関東地方 震災被害      # ライブラリ全文検索（AND）
+  uv run prewar search 関東地方 OR 大阪府下   # いずれかを含む
+  uv run prewar search 震災被害 NOT 大阪府下  # 除外
+  uv run prewar search 原文:罹災者            # 原文にだけ残る語を狙う
   uv run prewar index --rebuild       # 検索インデックス再構築
   uv run prewar stat                 # ライブラリ統計
   uv run prewar fix output/x.txt      # テキスト後処理（正規化/口語体化）
@@ -167,7 +170,9 @@ def _menu_shoot() -> int:
 
 
 def _menu_search() -> int:
-    answer = questionary.text("検索語（スペース区切りでAND検索）:").ask()
+    answer = questionary.text(
+        "検索語（空白=AND / OR=いずれか / NOT 以降=除外 / 原文:語=対象を限定）:"
+    ).ask()
     if not answer or not answer.strip():
         print("検索語が空のため中止しました。")
         return 0

@@ -27,19 +27,12 @@ LLM段は非決定的かつ低速なので再実行せず、保存済み modern.
 
 import argparse
 import difflib
-import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from utils.config import CONFIG
+from utils.terminal import DIM, GREEN, RED, RESET, should_use_color
 from utils.text_normalizer import normalize_text
-
-# ---------- ANSIカラー ----------
-RED = "\033[31m"
-GREEN = "\033[32m"
-DIM = "\033[2m"
-RESET = "\033[0m"
 
 
 # ---------- 差分計算（純粋関数・テスト対象） ----------
@@ -169,18 +162,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _should_use_color(no_color_flag: bool) -> bool:
-    """色付けするかを判定する。
-
-    --no-color / NO_COLOR 環境変数 / 非tty（パイプ・リダイレクト）/ 設定の
-    いずれかが無効を示すなら色を付けない。
-    """
-    if no_color_flag:
-        return False
-    if os.environ.get("NO_COLOR"):
-        return False
-    if not CONFIG.get("diff.color", True):
-        return False
-    return sys.stdout.isatty()
+    """色付けするかを判定する（判定の実体は utils.terminal に集約）。"""
+    return should_use_color(no_color_flag, "diff.color")
 
 
 def _print_stage(title: str, before: str, after: str, use_color: bool, context: int) -> None:

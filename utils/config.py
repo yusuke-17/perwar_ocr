@@ -54,7 +54,14 @@ _DEFAULTS: dict[str, Any] = {
         "temperature": 0.0,  # 読み取りに創造性は不要。同じ画像なら同じ結果に寄せる
         "seed": 0,           # 残るサンプリングの揺らぎも固定して再現性を確保する
     },
-    "search": {"limit": 20, "min_query_chars": 3},
+    "search": {
+        "limit": 20,
+        "min_query_chars": 3,
+        # 検索結果の抜粋の長さ。SQLite の snippet() が定める上限は64で、
+        # 超えた指定は library_search.SNIPPET_MAX_CHARS で丸められる。
+        "snippet_chars": 40,
+        "color": True,  # 一致箇所の色付け（--no-color / NO_COLOR / 非tty でも無効）
+    },
     "diff": {"color": True, "context": 30},
     "preprocess": {
         "enabled": True,      # デフォルトON（--no-preprocess で実行時OFF）

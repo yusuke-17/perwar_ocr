@@ -38,6 +38,8 @@ modernize = "qwen3.5:9b" # 口語体変換に使うモデル
 # [search]
 # limit = 20             # 検索結果の表示件数
 # min_query_chars = 3    # trigram検索できる最小文字数
+# snippet_chars = 40     # 抜粋の長さ（--snippet で実行時に変更可。上限64）
+# color = true           # 一致箇所の色付け（--no-color / NO_COLOR / 非tty でも無効）
 #
 # [preprocess]            # 画像前処理（OCR入力前の整形・A1）
 # enabled = true          # 前処理全体のON/OFF（--no-preprocess で実行時OFF）

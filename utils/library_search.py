@@ -9,8 +9,11 @@ library/ 配下に蓄積された文書を SQLite FTS5 (trigram tokenizer) で�
     from utils.library_search import LibraryIndex
 
     idx = LibraryIndex(Path("library"))
-    stats = idx.update()                  # 差分更新
-    hits = idx.search("関東 震災", limit=20)  # AND検索
+    stats = idx.update()                       # 差分更新
+    hits = idx.search("関東地方 震災被害")       # AND検索
+    hits = idx.search("関東地方 OR 大阪府下")    # OR検索
+    hits = idx.search("震災被害 NOT 大阪府下")   # 除外
+    hits = idx.search("原文:罹災者")             # 対象を限定
     for h in hits:
         print(h.id, h.title, h.snippet)
 """
@@ -18,7 +21,7 @@ library/ 配下に蓄積された文書を SQLite FTS5 (trigram tokenizer) で�
 import json
 import sqlite3
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from utils.config import CONFIG
@@ -41,14 +44,57 @@ INDEX_SCHEMA_VERSION = 2
 # 索引の入力となるファイル（差分更新の変更検知はこの3つを見る）
 _SOURCE_FILES = ("meta.json", "modern.txt", "ocr_raw.txt")
 
-# 一致カラムの判定に使う区切り文字（STX/ETX）。本文に出現しないことを保証するため
-# 制御文字を使う。highlight() がこのマーカを入れたかどうかで一致を判定する。
-_MARK_OPEN = "\x02"
-_MARK_CLOSE = "\x03"
+# 一致箇所を示すマーカ（STX/ETX）。本文に出現しないことを保証するため制御文字を使う。
+# highlight() / snippet() の開始・終了記号として渡し、
+#   - highlight(): マーカの個数がそのカラムの一致箇所数になる
+#   - snippet():   抜粋のどこが一致箇所かを表示層へ伝える
+# 表示用の記号（角括弧・ANSI色）をここで埋め込まないのは、text 出力と JSON 出力で
+# 必要な表現が違うため。変換は scripts/library.py（表示層）の責務。
+MARK_OPEN = "\x02"
+MARK_CLOSE = "\x03"
+
+# 抜粋の省略記号（trigram では snippet の N がほぼ文字数に対応する）
+_SNIPPET_ELLIPSIS = "…"
+
+# 抜粋長の上限。SQLite の snippet() は N を「0 より大きく 64 以下」と定めている。
+# 手元の 3.50.4 は 64 超も通すが、ドキュメント外の挙動に依存すると版が上がったとき
+# 黙って壊れるため上限で丸める。これ以上が必要になったら highlight() の全文から
+# 自前で窓を切り出す方式へ移行する（design.md Decision 5）。
+SNIPPET_MAX_CHARS = 64
 
 # FTS テーブルのカラム番号（snippet()/highlight() に渡す）。
 # 0 = id (UNINDEXED), 1 = title, 2 = modern, 3 = original
 _FTS_FIELDS = ((1, "title"), (2, "modern"), (3, "original"))
+
+# 検索対象カラムの別名。利用者が書くのは日本語（`原文:罹災者`）でも英語でもよい。
+#
+# 別名表を挟むのは、利用者の入力が FTS5 の識別子として解釈される経路を断つため。
+# 生の識別子を通すと未知のカラム名が SQLite の `no such column` として漏れ、
+# 実装の内部（FTS5 のカラム名）が利用者に露出する。
+FIELD_ALIASES: dict[str, str] = {
+    "原文": "original",
+    "元": "original",
+    "original": "original",
+    "口語": "modern",
+    "現代": "modern",
+    "modern": "modern",
+    "題名": "title",
+    "表題": "title",
+    "title": "title",
+}
+
+# カラム限定の区切り文字。日本語入力からそのまま打てるよう全角コロンも受ける。
+_FIELD_SEPARATORS = (":", "：")
+
+# 演算子。記号（`-除外`）を使わないのは argparse の nargs="+" が `-` 始まりの語を
+# 未知オプションとして飲み込むため（design.md Decision 1）。
+_OP_OR = "OR"
+_OP_NOT = "NOT"
+
+# 語の役割（エラーメッセージで「どの語が弾かれたか」を伝えるために使う）
+_ROLE_TERM = "検索語"
+_ROLE_EXCLUDE = "除外語"
+_ROLE_FIELD = "限定語"
 
 
 # ---------- データクラス ----------
@@ -58,8 +104,11 @@ _FTS_FIELDS = ((1, "title"), (2, "modern"), (3, "original"))
 class SearchHit:
     """検索結果1件
 
-    matched_fields は検索語が実際に一致した対象の一覧
-    （"title" / "modern" / "original" の組み合わせ）。
+    snippet は一致箇所を MARK_OPEN / MARK_CLOSE で囲んだ文字列。
+    表示用の記号や色はここには含まれない（表示層で変換する）。
+
+    match_counts は対象ごとの一致箇所数（"title" / "modern" / "original"）。
+    matched_fields はそのうち1箇所以上一致した対象の一覧で、
     ("original",) だけなら「口語化で言い換えられて消えた語」に当たったことを意味する。
     """
 
@@ -69,6 +118,21 @@ class SearchHit:
     snippet: str
     created_at: str
     matched_fields: tuple[str, ...] = ()
+    match_counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class ParsedQuery:
+    """解析済みの検索クエリ
+
+    terms は (対象カラム名 or None, 正規化済みの語) の並び。
+    join は terms の結合方法（"AND" または "OR"）。
+    excludes は正規化済みの除外語で、互いに OR で束ねてから NOT を当てる。
+    """
+
+    terms: list[tuple[str | None, str]]
+    join: str
+    excludes: list[str]
 
 
 @dataclass
@@ -94,6 +158,186 @@ class QueryTooShortError(LibrarySearchError):
     """検索語が短すぎて trigram で扱えない"""
 
     pass
+
+
+class QuerySyntaxError(LibrarySearchError):
+    """検索クエリの組み立てが成立しない
+
+    除外語だけ・NOT の重複・未知の対象名など、語の長さ以外の理由で
+    検索式を作れない場合に投げる。
+    """
+
+    pass
+
+
+# ---------- クエリ解析 ----------
+
+
+def parse_query(query: str) -> ParsedQuery:
+    """検索クエリ文字列を解析する。
+
+    構文（利用者に見せるのはこれだけ）:
+        語 語          … すべてを含む（AND。従来どおり）
+        語 OR 語       … いずれかを含む（OR が1つでもあれば語群全体が OR）
+        語 NOT 語 語   … NOT 以降を除外（除外語は互いに OR）
+        原文:語        … 一致対象を限定（区切りは半角 : / 全角 ：）
+
+    OR を「モード切替」として扱い、AND と OR の混在を許さないのは、
+    FTS5 の優先順位（NOT > AND > OR）が利用者の直感と逆で、
+    混在を許すと説明できない挙動を抱え込むため（design.md Decision 2）。
+
+    Raises:
+        QueryTooShortError: 正規化後に最小文字数を割る語がある／語が1つも無い
+        QuerySyntaxError:   除外語のみ／NOT が2回以上／未知の対象名
+    """
+    tokens = [t for t in query.replace("　", " ").split(" ") if t]
+
+    raw_terms: list[tuple[str | None, str]] = []  # (対象カラム, 生の語)
+    raw_excludes: list[str] = []
+    join = "AND"
+    in_exclude = False
+
+    for token in tokens:
+        if token == _OP_NOT:
+            if in_exclude:
+                raise QuerySyntaxError(
+                    f"{_OP_NOT} は1回だけ指定できます（2回以上は解釈できません）"
+                )
+            in_exclude = True
+            continue
+        if token == _OP_OR:
+            # 語群の中の OR だけがモードを切り替える。除外語は元から互いに OR。
+            if not in_exclude:
+                join = "OR"
+            continue
+
+        field_name, term = _split_field(token)
+        if in_exclude:
+            if field_name is not None:
+                raise QuerySyntaxError(
+                    f"除外語に対象の限定は指定できません: {token}"
+                )
+            raw_excludes.append(term)
+        else:
+            raw_terms.append((field_name, term))
+
+    if not raw_terms:
+        if raw_excludes:
+            raise QuerySyntaxError(
+                "除外語だけでは検索できません（残す語も指定してください）"
+            )
+        raise QueryTooShortError("検索語が空です")
+
+    terms = [
+        (f, _normalize_checked(t, _ROLE_FIELD if f else _ROLE_TERM))
+        for f, t in raw_terms
+    ]
+    excludes = [_normalize_checked(t, _ROLE_EXCLUDE) for t in raw_excludes]
+    return ParsedQuery(terms=terms, join=join, excludes=excludes)
+
+
+def _split_field(token: str) -> tuple[str | None, str]:
+    """`原文:罹災者` を ("original", "罹災者") に分解する。
+
+    コロンの左が別名表にある場合だけ限定として扱う。そうしないと
+    `午前10:30` のような本文由来のコロンが限定指定に誤解される。
+
+    ただし左が ASCII 英字だけの語（`body:`、`orig:` 等）は、日本語の資料本文に
+    現れる見込みが無く「対象名の書き間違い」とみなせるため、黙って検索語に
+    落とさずエラーにする。
+    """
+    for sep in _FIELD_SEPARATORS:
+        head, found, tail = token.partition(sep)
+        if not found:
+            continue
+        alias = FIELD_ALIASES.get(head) or FIELD_ALIASES.get(head.lower())
+        if alias is not None:
+            return alias, tail
+        if head.isascii() and head.isalpha():
+            raise QuerySyntaxError(
+                f'"{head}" は検索対象の名前ではありません。'
+                f"使えるのは: {'、'.join(sorted(set(FIELD_ALIASES)))}"
+            )
+    return None, token
+
+
+def _normalize_checked(term: str, role: str) -> str:
+    """語を照合用に正規化し、trigram で扱える長さかを検査する。
+
+    長さの判定を正規化の「後」に行うのは、歴史的仮名遣いの変換や拗音の縮約で
+    字数が縮むため（「けふ」→「きょう」のように増える場合も減る場合もある）。
+    """
+    normalized = normalize_query(term)
+    if len(normalized) < TRIGRAM_MIN_QUERY_CHARS:
+        shown = f'"{normalized}"' if normalized else "（空）"
+        suffix = f"（{role}「{term}」の正規化後）" if normalized != term else f"（{role}）"
+        raise QueryTooShortError(
+            f"{shown} は{TRIGRAM_MIN_QUERY_CHARS}文字未満のため "
+            f"trigram で検索できません{suffix}"
+        )
+    return normalized
+
+
+def build_match_expr(parsed: ParsedQuery) -> str:
+    """解析済みクエリを FTS5 の MATCH 式へ組み立てる。
+
+    語群を丸ごと括弧で包んでから NOT を当てることで、FTS5 の優先順位
+    （NOT > AND > OR）が結果に現れないようにする。
+
+        ("A" AND "B") NOT ("C" OR "D")
+        (({original} : "A") AND "B")
+
+    カラム限定した語を括弧で包むのは、FTS5 の `{col} : expr` が
+    直後の1句にしか掛からないことを式の見た目からも明らかにするため。
+    """
+    parts = [
+        f"({{{field_name}}} : {_quote(term)})" if field_name else _quote(term)
+        for field_name, term in parsed.terms
+    ]
+    expr = f"({f' {parsed.join} '.join(parts)})"
+    if parsed.excludes:
+        excluded = " OR ".join(_quote(t) for t in parsed.excludes)
+        expr = f"{expr} NOT ({excluded})"
+    return expr
+
+
+def _quote(term: str) -> str:
+    """FTS5 の文字列リテラルにする（内部のダブルクォートは "" にエスケープ）"""
+    return '"' + term.replace('"', '""') + '"'
+
+
+# ---------- 抜粋マーカの解析 ----------
+
+
+def split_marked(marked: str) -> tuple[str, list[tuple[int, int]]]:
+    """マーカ付き抜粋を「素の本文」と「一致箇所の [開始, 終了) 位置」に分ける。
+
+    位置は素の本文における文字インデックス。表示用の記号を本文に混ぜないため、
+    text 出力（ANSI色）と JSON 出力（構造化）はどちらもここを通す。
+
+    対にならない孤立マーカは強調として扱わず、マーカ文字ごと落とす。
+    索引した本文が万一 STX/ETX を含んでいても表示が壊れないようにするため
+    （索引側でのサニタイズは索引の作り直しを伴うので行わない）。
+    """
+    plain: list[str] = []
+    spans: list[tuple[int, int]] = []
+    open_at: int | None = None
+
+    for ch in marked:
+        if ch == MARK_OPEN:
+            if open_at is None:
+                open_at = len(plain)
+            # 既に開いている最中の開始マーカは孤立とみなして捨てる
+        elif ch == MARK_CLOSE:
+            if open_at is not None:
+                spans.append((open_at, len(plain)))
+                open_at = None
+            # 対応する開始が無い終了マーカも捨てる
+        else:
+            plain.append(ch)
+
+    # 閉じられなかった開始マーカは強調にしない
+    return "".join(plain), spans
 
 
 # ---------- メインクラス ----------
@@ -211,58 +455,94 @@ class LibraryIndex:
         finally:
             conn.close()
 
-    def search(self, query: str, limit: int = 20) -> list[SearchHit]:
+    def search(
+        self,
+        query: str,
+        limit: int = 20,
+        snippet_chars: int | None = None,
+    ) -> list[SearchHit]:
         """全文検索
 
-        スペース区切りの語は AND 検索。各語は trigram で部分一致する。
-        2文字未満の語が含まれていたら QueryTooShortError を投げる。
+        クエリ構文は parse_query() を参照（AND / OR / NOT / 対象の限定）。
+        各語は trigram で部分一致し、正規化後に3文字未満だと QueryTooShortError。
+
+        snippet_chars は抜粋の長さ。None なら設定の既定値を使い、
+        SNIPPET_MAX_CHARS を超える指定は上限に丸める。
+
+        Raises:
+            ValueError: snippet_chars が零以下
         """
-        match_expr = self._build_match_expr(query)
+        match_expr = build_match_expr(parse_query(query))
+        length = self._resolve_snippet_chars(snippet_chars)
+
         self._ensure_ready()
         conn = self._connect()
         try:
             self._ensure_schema(conn)
             # snippet の第2引数 -1 は「最もよく一致したカラムから抜粋する」指定。
             # 原文にのみ残る語で当たったときに、その箇所が抜粋に出る。
-            # highlight() は一致が無ければマーカを入れずにカラム全文を返すので、
-            # マーカの有無がそのまま「そのカラムが一致したか」を表す。
-            marks = ", ".join(
-                f"instr(highlight(search, {num}, ?, ?), ?) > 0" for num, _ in _FTS_FIELDS
+            #
+            # 一致箇所数は highlight() が入れたマーカを SQL 内で数える。
+            # highlight() はカラム全文を返すので Python 側へ運ぶと
+            # 20件 × 3カラム分の本文が転送される。SQL で数えれば整数3つで済む。
+            # マーカは char() 式で埋め込み、パラメータの数を増やさない。
+            open_sql = f"char({ord(MARK_OPEN)})"
+            close_sql = f"char({ord(MARK_CLOSE)})"
+            counts = ", ".join(
+                f"length(highlight(search, {num}, {open_sql}, {close_sql}))"
+                f" - length(replace(highlight(search, {num}, {open_sql}, {close_sql}),"
+                f" {open_sql}, ''))"
+                for num, _ in _FTS_FIELDS
             )
-            params: list = []
-            for _ in _FTS_FIELDS:
-                params.extend([_MARK_OPEN, _MARK_CLOSE, _MARK_OPEN])
 
             cur = conn.execute(
                 f"""
                 SELECT s.id,
-                       snippet(search, -1, '[', ']', '...', 16) AS sn,
+                       snippet(search, -1, {open_sql}, {close_sql}, ?, ?) AS sn,
                        d.dir,
                        d.title,
                        d.created_at,
-                       {marks}
+                       {counts}
                   FROM search s JOIN documents d ON s.id = d.id
                  WHERE search MATCH ?
                  ORDER BY bm25(search)
                  LIMIT ?
                 """,
-                (*params, match_expr, limit),
+                (_SNIPPET_ELLIPSIS, length, match_expr, limit),
             )
-            return [
-                SearchHit(
-                    id=row[0],
-                    dir=Path(row[2]),
-                    title=row[3],
-                    snippet=row[1],
-                    created_at=row[4],
-                    matched_fields=tuple(
-                        name for i, (_, name) in enumerate(_FTS_FIELDS) if row[5 + i]
-                    ),
-                )
-                for row in cur
-            ]
+            return [self._row_to_hit(row) for row in cur]
         finally:
             conn.close()
+
+    @staticmethod
+    def _resolve_snippet_chars(snippet_chars: int | None) -> int:
+        """抜粋長を決める（既定値の補完と上限の丸め）"""
+        length = (
+            CONFIG.get("search.snippet_chars", 40)
+            if snippet_chars is None
+            else snippet_chars
+        )
+        if length <= 0:
+            raise ValueError(f"抜粋の長さは1以上で指定してください: {length}")
+        return min(length, SNIPPET_MAX_CHARS)
+
+    @staticmethod
+    def _row_to_hit(row: tuple) -> SearchHit:
+        """検索結果の1行を SearchHit にする（一致回数から matched_fields を導く）"""
+        match_counts = {
+            name: row[5 + i] for i, (_, name) in enumerate(_FTS_FIELDS)
+        }
+        return SearchHit(
+            id=row[0],
+            dir=Path(row[2]),
+            title=row[3],
+            snippet=row[1],
+            created_at=row[4],
+            matched_fields=tuple(
+                name for _, name in _FTS_FIELDS if match_counts[name] > 0
+            ),
+            match_counts=match_counts,
+        )
 
     def stat(self) -> dict:
         """インデックスの統計情報"""
@@ -459,32 +739,3 @@ class LibraryIndex:
     def _delete_doc(self, conn: sqlite3.Connection, doc_id: str) -> None:
         conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
         conn.execute("DELETE FROM search WHERE id = ?", (doc_id,))
-
-    def _build_match_expr(self, query: str) -> str:
-        """スペース区切りクエリを FTS5 の AND 構文に変換
-
-        - 半角/全角スペースで分割
-        - 各語を normalize_query() で照合用に正規化（旧字体・仮名遣い等を
-          インデックス側 modern.txt と揃える）
-        - 正規化「後」の文字数が TRIGRAM_MIN_QUERY_CHARS 未満なら
-          QueryTooShortError（拗音縮約で字数が縮むため長さ判定は正規化の後）
-        - ダブルクォートで囲んで AND 連結（特殊文字を無害化）
-        """
-        # 半角/全角スペース両方で分割
-        raw_terms = [t for t in query.replace("　", " ").split(" ") if t]
-        if not raw_terms:
-            raise QueryTooShortError("検索語が空です")
-
-        # 各語を照合用に正規化（インデックス側と字体・仮名遣いを揃える）
-        terms = [normalize_query(t) for t in raw_terms]
-
-        for term in terms:
-            if len(term) < TRIGRAM_MIN_QUERY_CHARS:
-                raise QueryTooShortError(
-                    f'"{term}" は{TRIGRAM_MIN_QUERY_CHARS}文字未満のため '
-                    "trigram で検索できません"
-                )
-
-        # ダブルクォート内のダブルクォートは "" にエスケープ
-        quoted = [f'"{t.replace(chr(34), chr(34) * 2)}"' for t in terms]
-        return " AND ".join(quoted)
