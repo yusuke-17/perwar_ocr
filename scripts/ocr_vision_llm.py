@@ -248,23 +248,12 @@ def select_images_batch() -> list[Path] | None:
     return sorted([INPUT_DIR / name for name in selected])
 
 
-def _save_legacy(text: str, image_path: Path, output_dir: Path) -> Path:
-    """旧形式の保存（単一画像）
+def _save_legacy(text: str, image_paths: list[Path], output_dir: Path) -> Path:
+    """旧形式の保存
 
     --legacy-output 指定時のみ呼ばれる。
-    ファイル名: {元画像名}_modern.txt
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / f"{image_path.stem}_modern.txt"
-    output_file.write_text(text, encoding="utf-8")
-    return output_file
-
-
-def _save_legacy_batch(text: str, image_paths: list[Path], output_dir: Path) -> Path:
-    """旧形式の保存（バッチ）
-
-    --legacy-output 指定時のみ呼ばれる。
-    ファイル名: {先頭画像名}-{末尾画像名}_modern.txt
+    ファイル名: 1枚なら {元画像名}_modern.txt、
+    複数枚なら {先頭画像名}-{末尾画像名}_modern.txt
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -565,6 +554,110 @@ def _batch_policy(args: argparse.Namespace) -> tuple[str, int]:
     return on_page_error, abort_after
 
 
+def _print_block(title: str, text: str) -> None:
+    """見出し付きで本文を表示する（OCR結果・正規化結果・変換結果で共通）"""
+    print()
+    print("=" * 50)
+    print(title)
+    print("=" * 50)
+    print(text)
+    print("-" * 50)
+
+
+def _normalize_step(args: argparse.Namespace, text: str) -> str:
+    """テキスト正規化（旧字体・仮名・誤読修正）を行い、結果を表示する
+
+    --no-normalize なら何もせず入力をそのまま返す。
+    """
+    if args.no_normalize:
+        print("\n[正規化] テキスト正規化をスキップ（--no-normalize）")
+        return text
+
+    print("\n[正規化] テキスト正規化中（旧字体・仮名・誤読修正）...")
+    normalized = normalize_text(text)
+    print("  完了")
+    _print_block("正規化結果", normalized)
+    return normalized
+
+
+def _build_record(
+    args: argparse.Namespace,
+    image_paths: list[Path],
+    outcome: BatchOcrOutcome,
+    ocr_raw: str,
+    modern: str,
+    modern_meta: MetaModernize,
+    pre_paths: list[Path] | None,
+    pre_meta: MetaPreprocess | None,
+) -> DocumentRecord:
+    """OCR結果から保存用のレコードを組み立てる（純粋関数）
+
+    成功ページだけを残すため、元画像と前処理後画像を outcome.ok_indices の
+    同じ添字で絞り込む（保存される source_NN の連番とテキストのページ順を揃える）。
+    OCR メタ情報は全体を1件として記録する
+    （model/prompt/options は先頭ページのもの、elapsed_seconds は合計）。
+
+    1枚でも複数枚でも同じ規則で組み立てる。失敗ページが無ければ
+    page_failures は空になり、meta.json に pages セクションは出ない。
+    """
+    ok_sources = [image_paths[i] for i in outcome.ok_indices]
+    ok_pre_paths = [pre_paths[i] for i in outcome.ok_indices] if pre_paths else None
+    first = outcome.results[0]
+    normalized = not args.no_normalize
+
+    return DocumentRecord(
+        source_paths=ok_sources,
+        ocr_raw=ocr_raw,
+        modern_text=modern,
+        ocr_meta=MetaOcr(
+            model=first.model,
+            prompt=first.prompt,
+            elapsed_seconds=sum(r.elapsed_seconds for r in outcome.results),
+            options=first.options,
+        ),
+        normalization=MetaNormalization(
+            old_kanji=normalized,
+            hentaigana=normalized,
+            historical_kana=normalized,
+            ocr_misread_correction=normalized,
+        ),
+        modernize=modern_meta,
+        preprocessed_paths=ok_pre_paths,
+        preprocess=pre_meta,
+        page_failures=outcome.failures,
+        pages_total=len(image_paths),
+        pages_aborted=outcome.aborted,
+    )
+
+
+def _save_outputs(args: argparse.Namespace, record: DocumentRecord) -> None:
+    """レコードをライブラリへ保存し、指定があれば旧形式でも書き出す"""
+    doc_dir = save_document(record, library_root=Path(args.library_root))
+    print(f"\n✓ ライブラリに保存: {doc_dir}")
+
+    if args.legacy_output:
+        legacy_path = _save_legacy(
+            record.modern_text, record.source_paths, Path(args.output)
+        )
+        print(f"✓ 旧形式でも保存: {legacy_path}")
+
+
+def _exit_code(outcome: BatchOcrOutcome, modern_meta: MetaModernize | None) -> int:
+    """終了コードを判定する（純粋関数）
+
+    1 = 成功ページが1枚も無い（保存物なし）
+    2 = 保存はできたが一部欠けた（OCR失敗ページ / 口語化の失敗・中断・失敗チャンク）
+    0 = 全ページのOCRと口語化が成功
+    """
+    if not outcome.results:
+        return 1
+    if outcome.failures:
+        return 2
+    if modern_meta is not None and (modern_meta.error or modern_meta.failed_chunks):
+        return 2
+    return 0
+
+
 def process_single(
     args: argparse.Namespace,
     image_path: Path,
@@ -574,100 +667,14 @@ def process_single(
 ) -> int:
     """1枚の画像を処理するパイプライン
 
+    1枚だけの process_batch への委譲（G7）。処理経路を1本にして、
+    片方だけ直して反映漏れが起きる構造を無くすため。入口を残しているのは、
+    呼び出し側（--separate のループ等）で「1枚ずつ別記録」の意図を読みやすくするため。
+
     client / modernizer はテスト用の差し替え口。None なら本番の実体を作る。
     終了コード: 0=成功 / 2=保存はできたが一部欠けた / 1=保存物なし
     """
-    # 前処理後画像は一時ディレクトリに置き、OCR入力に使う。
-    # 保存時は save_document が temp 削除前に library へ実体コピーする。
-    with tempfile.TemporaryDirectory(prefix="prewar_pre_") as tmp:
-        pre_paths, pre_meta = _preprocess_images(args, [image_path], Path(tmp))
-        ocr_target = pre_paths[0] if pre_paths else image_path
-
-        # ── 1. OCR ──
-        print(f"\n[1/3] OCR実行中: {image_path}")
-        print(f"  モデル: {args.model}")
-
-        client = client or _create_ocr_client(args)
-        try:
-            page = _run_ocr_page(client, ocr_target, image_path)
-        except KeyboardInterrupt:
-            print("\n⚠ 中断しました（保存するものがありません）")
-            return 1
-        if isinstance(page, MetaPageFailure):
-            return 1
-
-        result = page
-        ocr_raw = result.text
-
-        print()
-        print("=" * 50)
-        print("OCR結果")
-        print("=" * 50)
-        print(ocr_raw)
-        print("-" * 50)
-
-        # ── 2. テキスト正規化 ──
-        if not args.no_normalize:
-            print(f"\n[2/3] テキスト正規化中（旧字体・仮名・誤読修正）...")
-            normalized = normalize_text(ocr_raw)
-            print(f"  完了")
-
-            print()
-            print("=" * 50)
-            print("正規化結果")
-            print("=" * 50)
-            print(normalized)
-            print("-" * 50)
-        else:
-            print(f"\n[2/3] テキスト正規化をスキップ（--no-normalize）")
-            normalized = ocr_raw
-
-        # ── 3. 口語体変換 ──（失敗しても正規化テキストで保存まで進む）
-        modernizer = modernizer or TextModernizer()
-        modern, modern_meta = _run_modernize(modernizer, normalized, args)
-
-        if not args.no_modernize:
-            # 最終結果を表示
-            print()
-            print("=" * 50)
-            print("変換結果")
-            print("=" * 50)
-            print(modern)
-            print("-" * 50)
-
-        # ファイル保存
-        if not args.no_save:
-            record = DocumentRecord(
-                source_paths=[image_path],
-                ocr_raw=ocr_raw,
-                modern_text=modern,
-                ocr_meta=MetaOcr(
-                    model=result.model,
-                    prompt=result.prompt,
-                    elapsed_seconds=result.elapsed_seconds,
-                    options=result.options,
-                ),
-                normalization=MetaNormalization(
-                    old_kanji=not args.no_normalize,
-                    hentaigana=not args.no_normalize,
-                    historical_kana=not args.no_normalize,
-                    ocr_misread_correction=not args.no_normalize,
-                ),
-                modernize=modern_meta,
-                preprocessed_paths=pre_paths,
-                preprocess=pre_meta,
-            )
-            doc_dir = save_document(record, library_root=Path(args.library_root))
-            print(f"\n✓ ライブラリに保存: {doc_dir}")
-
-            if args.legacy_output:
-                legacy_path = _save_legacy(modern, image_path, Path(args.output))
-                print(f"✓ 旧形式でも保存: {legacy_path}")
-
-        # 口語体変換が部分的にしか成功しなかった場合は「部分成功」を伝える
-        if modern_meta.error or modern_meta.failed_chunks:
-            return 2
-        return 0
+    return process_batch(args, [image_path], client=client, modernizer=modernizer)
 
 
 def process_batch(
@@ -677,23 +684,26 @@ def process_batch(
     client: OllamaOCRClient | None = None,
     modernizer: TextModernizer | None = None,
 ) -> int:
-    """複数画像を結合して処理するパイプライン
+    """画像（1枚または複数枚）を結合して1件の記録にするパイプライン
 
     1枚のOCR失敗で全件を捨てず、成功したページだけで記録を作る（G2）。
     client / modernizer はテスト用の差し替え口。None なら本番の実体を作る。
     終了コード: 0=全ページ成功 / 2=一部欠けたが保存済み / 1=保存物なし
     """
     total = len(image_paths)
-    names = ", ".join(p.name for p in image_paths)
-    print(f"\n処理モード: 複数画像（{total}枚）")
-    print(f"対象: {names}")
+    if total > 1:
+        names = ", ".join(p.name for p in image_paths)
+        print(f"\n処理モード: 複数画像（{total}枚）")
+        print(f"対象: {names}")
 
+    # 前処理後画像は一時ディレクトリに置き、OCR入力に使う。
+    # 保存時は save_document が temp 削除前に library へ実体コピーする。
     with tempfile.TemporaryDirectory(prefix="prewar_pre_") as tmp:
-        # 前処理（全画像）。無効なら元画像をそのままOCRに使う。
+        # ── 1. 前処理（無効なら元画像をそのままOCRに使う）──
         pre_paths, pre_meta = _preprocess_images(args, image_paths, Path(tmp))
         ocr_targets = pre_paths if pre_paths else image_paths
 
-        # ── 1. 各画像をOCR（失敗ページはスキップして継続）──
+        # ── 2. 各画像をOCR（失敗ページはスキップして継続）──
         client = client or _create_ocr_client(args)
         on_page_error, abort_after = _batch_policy(args)
         outcome = _ocr_pages(
@@ -706,98 +716,44 @@ def process_batch(
 
         if not outcome.results:
             _print_failure_summary(outcome, total, saved=False)
-            return 1
+            return _exit_code(outcome, None)
 
-        # 成功ページだけで以降を組み立てる
-        # （画像とテキストを同じ添字で絞り、ページ順のズレを防ぐ）
-        ocr_results = outcome.results
-        ok_sources = [image_paths[i] for i in outcome.ok_indices]
-        ok_pre_paths = (
-            [pre_paths[i] for i in outcome.ok_indices] if pre_paths else None
-        )
-
-        # ── 2. テキスト結合 ──
-        ocr_raw_combined = "\n\n".join(r.text for r in ocr_results)
-        print(
-            f"\n結合テキスト: {len(ocr_raw_combined)}文字"
-            f"（{len(ocr_results)}/{total}画像分）"
-        )
-
-        print()
-        print("=" * 50)
-        print("結合OCR結果")
-        print("=" * 50)
-        print(ocr_raw_combined)
-        print("-" * 50)
-
-        # ── 3. テキスト正規化 ──
-        if not args.no_normalize:
-            print(f"\n[正規化] テキスト正規化中（旧字体・仮名・誤読修正）...")
-            normalized = normalize_text(ocr_raw_combined)
-            print(f"  完了")
-
-            print()
-            print("=" * 50)
-            print("正規化結果")
-            print("=" * 50)
-            print(normalized)
-            print("-" * 50)
+        # ── 3. テキスト結合（成功ページのみ・元の順序）──
+        ocr_raw = "\n\n".join(r.text for r in outcome.results)
+        if total > 1:
+            print(
+                f"\n結合テキスト: {len(ocr_raw)}文字"
+                f"（{len(outcome.results)}/{total}画像分）"
+            )
+            _print_block("結合OCR結果", ocr_raw)
         else:
-            print(f"\n[正規化] テキスト正規化をスキップ（--no-normalize）")
-            normalized = ocr_raw_combined
+            _print_block("OCR結果", ocr_raw)
 
-        # ── 4. 口語体変換 ──（失敗しても正規化テキストで保存まで進む）
+        # ── 4. テキスト正規化 ──
+        normalized = _normalize_step(args, ocr_raw)
+
+        # ── 5. 口語体変換 ──（失敗しても正規化テキストで保存まで進む）
         modernizer = modernizer or TextModernizer()
         modern, modern_meta = _run_modernize(modernizer, normalized, args)
-
         if not args.no_modernize:
-            # 最終結果を表示
-            print()
-            print("=" * 50)
-            print("変換結果")
-            print("=" * 50)
-            print(modern)
-            print("-" * 50)
+            _print_block("変換結果", modern)
 
-        # ファイル保存
+        # ── 6. 保存 ──
         if not args.no_save:
-            # OCR メタ情報はバッチ全体を1件として記録する
-            # （model/prompt はバッチ内で同一、elapsed_seconds は合計）
-            record = DocumentRecord(
-                source_paths=ok_sources,
-                ocr_raw=ocr_raw_combined,
-                modern_text=modern,
-                ocr_meta=MetaOcr(
-                    model=ocr_results[0].model,
-                    prompt=ocr_results[0].prompt,
-                    elapsed_seconds=sum(r.elapsed_seconds for r in ocr_results),
-                    options=ocr_results[0].options,
-                ),
-                normalization=MetaNormalization(
-                    old_kanji=not args.no_normalize,
-                    hentaigana=not args.no_normalize,
-                    historical_kana=not args.no_normalize,
-                    ocr_misread_correction=not args.no_normalize,
-                ),
-                modernize=modern_meta,
-                preprocessed_paths=ok_pre_paths,
-                preprocess=pre_meta,
-                page_failures=outcome.failures,
-                pages_total=total,
-                pages_aborted=outcome.aborted,
+            record = _build_record(
+                args,
+                image_paths,
+                outcome,
+                ocr_raw,
+                modern,
+                modern_meta,
+                pre_paths,
+                pre_meta,
             )
-            doc_dir = save_document(record, library_root=Path(args.library_root))
-            print(f"\n✓ ライブラリに保存: {doc_dir}")
-
-            if args.legacy_output:
-                legacy_path = _save_legacy_batch(modern, ok_sources, Path(args.output))
-                print(f"✓ 旧形式でも保存: {legacy_path}")
+            _save_outputs(args, record)
 
         _print_failure_summary(outcome, total)
-
-        if outcome.failures or modern_meta.error or modern_meta.failed_chunks:
-            return 2
-        return 0
+        return _exit_code(outcome, modern_meta)
 
 
 def load_folder_images(folder: Path) -> list[Path] | None:

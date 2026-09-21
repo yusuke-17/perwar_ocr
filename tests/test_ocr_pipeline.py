@@ -12,11 +12,20 @@ Ollama には接続しない。OCRクライアントと口語化器は手書き�
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts import ocr_vision_llm
 from scripts.cli import _defaults_for
-from scripts.ocr_vision_llm import process_batch, process_folder, process_single
-from utils.library_writer import SCHEMA_VERSION
-from utils.ollama_client import ImageFileError, OllamaConnectionError
+from scripts.ocr_vision_llm import (
+    BatchOcrOutcome,
+    _build_record,
+    _exit_code,
+    process_batch,
+    process_folder,
+    process_single,
+)
+from utils.library_writer import SCHEMA_VERSION, MetaModernize, MetaPageFailure
+from utils.ollama_client import ImageFileError, OCRResult, OllamaConnectionError
 from utils.text_normalizer import normalize_text
 
 from fakes import MODERN_MARK, EchoModernizer, FakeClient, StubModernizer
@@ -422,3 +431,199 @@ def test_folder_separate_all_failure(tmp_path):
 
     assert code == 1
     assert _docs(tmp_path) == []
+
+
+# ---------- 一本化（G7）で意図して変えた表示 ----------
+
+
+def test_single_does_not_show_batch_heading(tmp_path, capsys):
+    """1枚処理では「処理モード: 複数画像」「結合OCR結果」の見出しを出さない"""
+    [image] = _images(tmp_path / "input", 1)
+
+    process_single(
+        _args(tmp_path), image, client=FakeClient(), modernizer=EchoModernizer()
+    )
+
+    out = capsys.readouterr().out
+    assert "処理モード: 複数画像" not in out
+    assert "結合OCR結果" not in out
+    assert "OCR結果" in out
+
+
+def test_batch_still_shows_batch_heading(tmp_path, capsys):
+    """複数枚処理では従来どおり見出しと対象画像を表示する"""
+    images = _images(tmp_path / "input", 2)
+
+    process_batch(
+        _args(tmp_path), images, client=FakeClient(), modernizer=EchoModernizer()
+    )
+
+    out = capsys.readouterr().out
+    assert "処理モード: 複数画像（2枚）" in out
+    assert "対象: p001.png, p002.png" in out
+
+
+def test_single_failure_shows_summary_and_retry_hint(tmp_path, capsys):
+    """1枚のOCR失敗でも、失敗画像名・理由・再試行のコマンド例をまとめて出す"""
+    [image] = _images(tmp_path / "input", 1)
+    client = FakeClient({1: OllamaConnectionError("Ollamaが停止中")})
+
+    code = process_single(
+        _args(tmp_path), image, client=client, modernizer=EchoModernizer()
+    )
+
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "[1] p001.png — Ollamaが停止中" in out
+    assert "再試行するには" in out
+    assert "uv run prewar ocr <画像パス>" in out
+
+
+def test_single_interrupt_saves_nothing(tmp_path):
+    """1枚のOCR中に Ctrl+C: 終了コード1、記録は作られない（従来と同じ）"""
+    [image] = _images(tmp_path / "input", 1)
+    client = FakeClient({1: KeyboardInterrupt()})
+
+    code = process_single(
+        _args(tmp_path), image, client=client, modernizer=EchoModernizer()
+    )
+
+    assert code == 1
+    assert _docs(tmp_path) == []
+
+
+# ---------- 純粋関数: 記録の組み立て ----------
+
+
+def _ocr_result(text: str, elapsed: float, model: str = "glm-ocr"):
+    return OCRResult(
+        text=text,
+        model=model,
+        image_path="",
+        elapsed_seconds=elapsed,
+        prompt="p",
+        options={"temperature": 0.0},
+    )
+
+
+def _outcome(results, ok_indices, failures=(), aborted=False) -> BatchOcrOutcome:
+    return BatchOcrOutcome(
+        results=list(results),
+        ok_indices=list(ok_indices),
+        failures=list(failures),
+        aborted=aborted,
+    )
+
+
+def test_build_record_sums_elapsed_and_uses_first_page_meta(tmp_path):
+    """OCR所要時間は合計、モデル名・プロンプト・生成パラメータは先頭ページのもの"""
+    images = [Path(f"p{i:03d}.png") for i in (1, 2)]
+    outcome = _outcome(
+        [_ocr_result("一", 1.5, model="先頭"), _ocr_result("二", 2.0, model="次")],
+        [0, 1],
+    )
+
+    record = _build_record(
+        _args(tmp_path), images, outcome, "一\n\n二", "現代語", MetaModernize(True, "m"),
+        None, None,
+    )
+
+    assert record.ocr_meta.elapsed_seconds == 3.5
+    assert record.ocr_meta.model == "先頭"
+    assert record.ocr_meta.options == {"temperature": 0.0}
+    assert record.source_paths == images
+    assert record.page_failures == []
+    assert record.pages_total == 2
+
+
+def test_build_record_keeps_only_successful_pages(tmp_path):
+    """失敗ページを除き、元画像と前処理後画像を同じ添字で絞り込む"""
+    images = [Path(f"p{i:03d}.png") for i in (1, 2, 3)]
+    pre = [Path(f"pre_{i:02d}.png") for i in (1, 2, 3)]
+    failure = MetaPageFailure(index=2, source="p002.png", reason="image", message="壊")
+    outcome = _outcome(
+        [_ocr_result("一", 1.0), _ocr_result("三", 1.0)], [0, 2], [failure], True
+    )
+
+    record = _build_record(
+        _args(tmp_path), images, outcome, "一\n\n三", "現代語", MetaModernize(True, "m"),
+        pre, None,
+    )
+
+    assert record.source_paths == [images[0], images[2]]
+    assert record.preprocessed_paths == [pre[0], pre[2]]
+    assert record.page_failures == [failure]
+    assert record.pages_total == 3
+    assert record.pages_aborted is True
+
+
+@pytest.mark.parametrize("no_normalize", [False, True])
+def test_build_record_normalization_flags(tmp_path, no_normalize):
+    """正規化の4項目は --no-normalize の有無でそろって切り替わる"""
+    outcome = _outcome([_ocr_result("一", 1.0)], [0])
+
+    record = _build_record(
+        _args(tmp_path, no_normalize=no_normalize),
+        [Path("p001.png")],
+        outcome,
+        "一",
+        "一",
+        MetaModernize(True, "m"),
+        None,
+        None,
+    )
+
+    flags = record.normalization
+    expected = not no_normalize
+    assert (
+        flags.old_kanji,
+        flags.hentaigana,
+        flags.historical_kana,
+        flags.ocr_misread_correction,
+    ) == (expected,) * 4
+
+
+# ---------- 純粋関数: 終了コード ----------
+
+_FAILURE = MetaPageFailure(index=1, source="p001.png", reason="timeout", message="t")
+
+
+@pytest.mark.parametrize(
+    ("outcome", "modern_meta", "expected"),
+    [
+        (_outcome([], [], [_FAILURE]), None, 1),
+        (_outcome([_ocr_result("一", 1.0)], [0]), MetaModernize(True, "m"), 0),
+        (_outcome([_ocr_result("一", 1.0)], [0]), MetaModernize(False, ""), 0),
+        (
+            _outcome([_ocr_result("一", 1.0)], [1], [_FAILURE]),
+            MetaModernize(True, "m"),
+            2,
+        ),
+        (
+            _outcome([_ocr_result("一", 1.0)], [0]),
+            MetaModernize(True, "m", error="停止中"),
+            2,
+        ),
+        (
+            _outcome([_ocr_result("一", 1.0)], [0]),
+            MetaModernize(True, "m", error="interrupted"),
+            2,
+        ),
+        (
+            _outcome([_ocr_result("一", 1.0)], [0]),
+            MetaModernize(True, "m", failed_chunks=1, chunk_total=5),
+            2,
+        ),
+    ],
+    ids=[
+        "全ページ失敗",
+        "全成功",
+        "口語化省略",
+        "失敗ページあり",
+        "口語化エラー",
+        "口語化中断",
+        "失敗チャンクあり",
+    ],
+)
+def test_exit_code(outcome, modern_meta, expected):
+    assert _exit_code(outcome, modern_meta) == expected
