@@ -24,37 +24,12 @@ from utils.library_writer import (
 )
 from utils.ollama_client import (
     ImageFileError,
-    OCRResult,
     OllamaConnectionError,
     OllamaTimeoutError,
 )
 
-
-class _FakeClient:
-    """指定したページ番号で例外を投げるOCRクライアント
-
-    fail_at: {1始まりのページ番号: 投げる例外} を渡す。
-    calls に実際に呼ばれた回数が残るので、打ち切りの検証にも使える。
-    """
-
-    model = "fake-ocr"
-
-    def __init__(self, fail_at: dict[int, BaseException] | None = None):
-        self.fail_at = fail_at or {}
-        self.calls = 0
-
-    def ocr(self, image_path):
-        self.calls += 1
-        error = self.fail_at.get(self.calls)
-        if error is not None:
-            raise error
-        return OCRResult(
-            text=f"ページ{self.calls}の本文",
-            model=self.model,
-            image_path=str(image_path),
-            elapsed_seconds=0.1,
-            prompt="テスト用",
-        )
+from fakes import FakeClient as _FakeClient
+from fakes import StubModernizer as _StubModernizer
 
 
 def _pages(n: int) -> list[Path]:
@@ -220,21 +195,6 @@ def test_preprocessed_targets_are_used():
 
 
 # ---------- 口語体変換の失敗吸収（G2b） ----------
-
-
-class _StubModernizer:
-    """modernize_detailed だけを持つ最小のスタブ"""
-
-    model = "qwen3.5:9b"
-
-    def __init__(self, result=None, error: BaseException | None = None):
-        self.result = result
-        self.error = error
-
-    def modernize_detailed(self, text: str):
-        if self.error is not None:
-            raise self.error
-        return self.result
 
 
 def test_modernize_failure_keeps_normalized_text():

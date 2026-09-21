@@ -565,9 +565,16 @@ def _batch_policy(args: argparse.Namespace) -> tuple[str, int]:
     return on_page_error, abort_after
 
 
-def process_single(args: argparse.Namespace, image_path: Path) -> int:
+def process_single(
+    args: argparse.Namespace,
+    image_path: Path,
+    *,
+    client: OllamaOCRClient | None = None,
+    modernizer: TextModernizer | None = None,
+) -> int:
     """1枚の画像を処理するパイプライン
 
+    client / modernizer はテスト用の差し替え口。None なら本番の実体を作る。
     終了コード: 0=成功 / 2=保存はできたが一部欠けた / 1=保存物なし
     """
     # 前処理後画像は一時ディレクトリに置き、OCR入力に使う。
@@ -580,7 +587,7 @@ def process_single(args: argparse.Namespace, image_path: Path) -> int:
         print(f"\n[1/3] OCR実行中: {image_path}")
         print(f"  モデル: {args.model}")
 
-        client = _create_ocr_client(args)
+        client = client or _create_ocr_client(args)
         try:
             page = _run_ocr_page(client, ocr_target, image_path)
         except KeyboardInterrupt:
@@ -616,7 +623,7 @@ def process_single(args: argparse.Namespace, image_path: Path) -> int:
             normalized = ocr_raw
 
         # ── 3. 口語体変換 ──（失敗しても正規化テキストで保存まで進む）
-        modernizer = TextModernizer()
+        modernizer = modernizer or TextModernizer()
         modern, modern_meta = _run_modernize(modernizer, normalized, args)
 
         if not args.no_modernize:
@@ -663,10 +670,17 @@ def process_single(args: argparse.Namespace, image_path: Path) -> int:
         return 0
 
 
-def process_batch(args: argparse.Namespace, image_paths: list[Path]) -> int:
+def process_batch(
+    args: argparse.Namespace,
+    image_paths: list[Path],
+    *,
+    client: OllamaOCRClient | None = None,
+    modernizer: TextModernizer | None = None,
+) -> int:
     """複数画像を結合して処理するパイプライン
 
     1枚のOCR失敗で全件を捨てず、成功したページだけで記録を作る（G2）。
+    client / modernizer はテスト用の差し替え口。None なら本番の実体を作る。
     終了コード: 0=全ページ成功 / 2=一部欠けたが保存済み / 1=保存物なし
     """
     total = len(image_paths)
@@ -680,7 +694,7 @@ def process_batch(args: argparse.Namespace, image_paths: list[Path]) -> int:
         ocr_targets = pre_paths if pre_paths else image_paths
 
         # ── 1. 各画像をOCR（失敗ページはスキップして継続）──
-        client = _create_ocr_client(args)
+        client = client or _create_ocr_client(args)
         on_page_error, abort_after = _batch_policy(args)
         outcome = _ocr_pages(
             client,
@@ -733,7 +747,7 @@ def process_batch(args: argparse.Namespace, image_paths: list[Path]) -> int:
             normalized = ocr_raw_combined
 
         # ── 4. 口語体変換 ──（失敗しても正規化テキストで保存まで進む）
-        modernizer = TextModernizer()
+        modernizer = modernizer or TextModernizer()
         modern, modern_meta = _run_modernize(modernizer, normalized, args)
 
         if not args.no_modernize:
@@ -801,7 +815,13 @@ def load_folder_images(folder: Path) -> list[Path] | None:
     return images
 
 
-def process_folder(args: argparse.Namespace, folder: Path) -> int:
+def process_folder(
+    args: argparse.Namespace,
+    folder: Path,
+    *,
+    client: OllamaOCRClient | None = None,
+    modernizer: TextModernizer | None = None,
+) -> int:
     """フォルダ（撮影セッション等）内の画像を一括処理する
 
     既定は結合して1記録（process_batch）。--separate 指定時は
@@ -822,7 +842,9 @@ def process_folder(args: argparse.Namespace, folder: Path) -> int:
         for i, image in enumerate(images, start=1):
             print(f"\n===== {i}/{len(images)}: {image.name} =====")
             try:
-                code = process_single(args, image)
+                code = process_single(
+                    args, image, client=client, modernizer=modernizer
+                )
             except KeyboardInterrupt:
                 print("\n⚠ 中断しました。ここまでの記録は保存済みです")
                 interrupted = True
@@ -844,7 +866,7 @@ def process_folder(args: argparse.Namespace, folder: Path) -> int:
             return 2
         return 0
 
-    return process_batch(args, images)
+    return process_batch(args, images, client=client, modernizer=modernizer)
 
 
 def cmd_shoot(args: argparse.Namespace) -> int:
