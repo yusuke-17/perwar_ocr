@@ -17,7 +17,6 @@ modernize = "qwen3.5:9b" # 口語体変換に使うモデル
 #
 # [chunk]
 # size = 2000            # 口語体変換の1チャンクの文字数
-# overlap = 200          # チャンク間のオーバーラップ文字数
 #
 # [llm]                   # 口語体変換の生成パラメータ（そのままOllamaのoptionsに渡る）
 # temperature = 0.5      # 創造性（低いほど原文に忠実）

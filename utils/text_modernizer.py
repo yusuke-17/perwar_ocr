@@ -35,7 +35,6 @@ DEFAULT_TEXT_MODEL = CONFIG.get("models.modernize")
 
 # チャンク分割の設定
 DEFAULT_CHUNK_SIZE = CONFIG.get("chunk.size")  # 文字数
-DEFAULT_CHUNK_OVERLAP = CONFIG.get("chunk.overlap")  # オーバーラップ文字数
 
 # チャンク変換が失敗したときの方針
 #   "keep_original": 原文のまま採用して次のチャンクへ進む（既定）
@@ -100,11 +99,6 @@ class ModernizeResult:
     failures: list[ChunkFailure] = field(default_factory=list)
     aborted: bool = False  # Ctrl+C で途中打ち切りしたか
 
-    @property
-    def ok(self) -> bool:
-        """全チャンクが正常に変換できたか"""
-        return not self.failures and not self.aborted
-
 
 # ---------- メインクラス ----------
 
@@ -126,12 +120,10 @@ class TextModernizer:
         self,
         model: str = DEFAULT_TEXT_MODEL,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
-        chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
         on_chunk_error: str = DEFAULT_ON_CHUNK_ERROR,
     ):
         self.model = model
         self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
         self.on_chunk_error = on_chunk_error
 
     def modernize(self, text: str) -> str:

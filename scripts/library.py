@@ -1,24 +1,23 @@
 """
-ライブラリ検索 CLI
+ライブラリ検索（統合CLI の search / index / stat の中身）
 
 library/ 配下に蓄積された文書を全文検索する。
-サブコマンド型（index / find / stat）。
+引数定義（add_*_arguments）と各処理（cmd_*）を scripts/cli.py から呼ぶ。
 
 使い方:
-    uv run prewar-library index                     # 差分更新
-    uv run prewar-library index --rebuild            # 全件再構築
-    uv run prewar-library find 関東地方 震災被害      # AND検索
-    uv run prewar-library find 関東地方 OR 大阪府下   # OR検索
-    uv run prewar-library find 震災被害 NOT 大阪府下  # 除外
-    uv run prewar-library find 原文:罹災者            # 対象を限定
-    uv run prewar-library find 警察署 --limit 50
-    uv run prewar-library find 警察署 --format json
-    uv run prewar-library stat                       # 統計情報
+    uv run prewar index                          # 差分更新
+    uv run prewar index --rebuild                # 全件再構築
+    uv run prewar search 関東地方 震災被害        # AND検索
+    uv run prewar search 関東地方 OR 大阪府下     # OR検索
+    uv run prewar search 震災被害 NOT 大阪府下    # 除外
+    uv run prewar search 原文:罹災者              # 対象を限定
+    uv run prewar search 警察署 --limit 50
+    uv run prewar search 警察署 --format json
+    uv run prewar stat                           # 統計情報
 """
 
 import argparse
 import json
-import sys
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -94,38 +93,16 @@ def add_find_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_arguments(parser: argparse.ArgumentParser) -> None:
-    """library 全体の引数（共通オプション + index/find/stat サブコマンド）を追加する"""
-    add_library_root_argument(parser)
-
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    p_index = subparsers.add_parser("index", help="検索インデックスを更新")
-    add_index_arguments(p_index)
-
-    p_find = subparsers.add_parser("find", help="ライブラリを全文検索")
-    add_find_arguments(p_find)
-
-    subparsers.add_parser("stat", help="ライブラリの統計情報を表示")
-
-
-def parse_args() -> argparse.Namespace:
-    """コマンドライン引数をパースする"""
-    parser = argparse.ArgumentParser(
-        description="戦前日本語OCRライブラリ検索ツール",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+# prewar search --help に出す検索構文の説明（RawDescriptionHelpFormatter 前提）
+SEARCH_HELP_EPILOG = """
 使用例:
-  uv run prewar-library index                     # 差分更新
-  uv run prewar-library index --rebuild            # 全件再構築
-  uv run prewar-library find 警察署                # 単一語検索
-  uv run prewar-library find 関東地方 震災被害      # AND検索（すべて含む）
-  uv run prewar-library find 関東地方 OR 大阪府下   # OR検索（いずれかを含む）
-  uv run prewar-library find 震災被害 NOT 大阪府下  # 除外（NOT以降を含まない）
-  uv run prewar-library find 原文:罹災者            # 原文にだけ残る語を狙う
-  uv run prewar-library find 警察署 --limit 50 --snippet 64
-  uv run prewar-library find 警察署 --format json
-  uv run prewar-library stat                       # 統計情報
+  uv run prewar search 警察署                # 単一語検索
+  uv run prewar search 関東地方 震災被害      # AND検索（すべて含む）
+  uv run prewar search 関東地方 OR 大阪府下   # OR検索（いずれかを含む）
+  uv run prewar search 震災被害 NOT 大阪府下  # 除外（NOT以降を含まない）
+  uv run prewar search 原文:罹災者            # 原文にだけ残る語を狙う
+  uv run prewar search 警察署 --limit 50 --snippet 64
+  uv run prewar search 警察署 --format json
 
 検索構文:
   語 語        すべてを含む（AND）
@@ -134,10 +111,7 @@ def parse_args() -> argparse.Namespace:
   原文:語      一致対象を限定（原文 / 口語 / 題名。全角コロンも可）
 
   ※ 各語は正規化後3文字以上必要（trigram索引のため）
-        """,
-    )
-    add_arguments(parser)
-    return parser.parse_args()
+"""
 
 
 # ---------- 各サブコマンド ----------
@@ -307,24 +281,3 @@ def _hit_to_dict(hit: SearchHit) -> dict:
     d["snippet_highlights"] = [[start, end] for start, end in spans]
     return d
 
-
-# ---------- エントリポイント ----------
-
-
-def run(args: argparse.Namespace) -> int:
-    """パース済み引数を受け取り、対応するサブコマンドを実行する"""
-    if args.command == "index":
-        return cmd_index(args)
-    if args.command == "find":
-        return cmd_find(args)
-    if args.command == "stat":
-        return cmd_stat(args)
-    return 1
-
-
-def main() -> int:
-    return run(parse_args())
-
-
-if __name__ == "__main__":
-    sys.exit(main())

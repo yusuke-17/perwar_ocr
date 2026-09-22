@@ -132,3 +132,30 @@ def test_run_shoot_sets_image_to_shoot(parser, monkeypatch):
     assert args.func(args) == 0
     assert len(received) == 1
     assert received[0].image == "shoot"
+
+
+# ---------- 起動コマンドとヘルプ（G8） ----------
+
+
+def test_only_prewar_command_is_installed():
+    """起動コマンドは統合CLI `prewar` だけ（旧 prewar-ocr / prewar-library は無い）"""
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    with pyproject.open("rb") as f:
+        scripts = tomllib.load(f)["project"]["scripts"]
+
+    assert scripts == {"prewar": "scripts.cli:main"}
+
+
+def test_search_help_explains_query_syntax(parser):
+    """prewar search --help に検索構文（AND/OR/NOT/対象限定/3文字の注意）が出る"""
+    sub_action = next(
+        a for a in parser._actions if isinstance(a, argparse._SubParsersAction)
+    )
+    help_text = sub_action.choices["search"].format_help()
+
+    for expected in ("OR", "NOT", "原文:", "3文字以上", "uv run prewar search"):
+        assert expected in help_text
+    assert "prewar-library" not in help_text

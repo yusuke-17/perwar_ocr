@@ -16,18 +16,17 @@ dependencies = [
     "numpy>=2.4.2",
     "ollama>=0.6.1",
     "opencv-python-headless>=4.11.0.86",
-    "pillow>=10.4.0",
     "questionary>=2.1.1",
-    "requests>=2.32.5",
     "rich>=13.0",
     "senzen-word",
-    "surya-ocr>=0.17.1",
 ]
 
 [project.scripts]
 prewar = "scripts.cli:main"
-prewar-ocr = "scripts.ocr_vision_llm:main"
-prewar-library = "scripts.library:main"
+
+[project.optional-dependencies]
+# 補助OCR（現状はOCR処理に未使用。A2 複数エンジン比較用）。uv sync --extra surya で導入
+surya = ["surya-ocr>=0.17.1"]
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

@@ -6,10 +6,26 @@
   2. 依存パッケージのインポート
   3. Ollama サーバーへの接続
   4. GLM-OCR モデルの存在確認 & 簡易テスト
-  5. Surya OCR の読み込み確認
+  5. Surya OCR の導入有無（任意。未導入でも不合格にしない）
+
+合否（終了コード）は必須項目（1〜4）だけで決める。
 """
 
+import importlib.util
 import sys
+
+# 確認する必須パッケージ（import 名 → パッケージ名）。
+# pyproject.toml の dependencies のうち、コードが実際に import するものにそろえる。
+REQUIRED_PACKAGES = {
+    "ollama": "ollama",                       # OCR・口語化
+    "httpx": "httpx",                         # タイムアウト例外の捕捉
+    "cv2": "opencv-python-headless",          # 画像前処理
+    "numpy": "numpy",                         # 画像前処理
+    "jaconv": "jaconv",                       # 全角正規化
+    "senzen_word": "senzen-word",             # 旧字体・仮名変換
+    "questionary": "questionary",             # 対話メニュー
+    "rich": "rich",                           # 進捗表示
+}
 
 
 def check_python_version():
@@ -23,20 +39,15 @@ def check_python_version():
 
 
 def check_packages():
-    """依存パッケージがインポートできるかチェック"""
-    packages = {
-        "ollama": "ollama",
-        "cv2": "opencv-python-headless",
-        "PIL": "Pillow",
-        "numpy": "numpy",
-    }
+    """必須パッケージがインポートできるかチェック"""
     all_ok = True
-    for module, name in packages.items():
+    for module, name in REQUIRED_PACKAGES.items():
         try:
             __import__(module)
             print(f"  ✓ {name}")
         except ImportError:
-            print(f"  ✗ {name} がインポートできません → uv add {name}")
+            # 依存は pyproject.toml に宣言済みなので、足りないのは「同期漏れ」
+            print(f"  ✗ {name} がインポートできません → uv sync を実行してください")
             all_ok = False
     return all_ok
 
@@ -100,22 +111,32 @@ def check_glm_ocr(model_names: list[str]):
 
 
 def check_surya():
-    """Surya OCR がインポートできるかチェック"""
-    try:
-        from surya.recognition import RecognitionPredictor
+    """Surya OCR（任意の追加依存）が導入済みかチェック
 
-        print("  ✓ surya-ocr インポートOK")
-        print("  ※ モデルの初回ダウンロードは初回実行時に自動で行われます")
+    import はせず有無だけを見る（import すると torch ごと読み込んで数秒かかるため）。
+    未導入でも False を返すだけで、合否には影響しない（main() 側で任意項目として扱う）。
+    """
+    if importlib.util.find_spec("surya") is not None:
+        print("  ✓ surya-ocr 導入済み")
         return True
-    except ImportError:
-        print("  ✗ surya-ocr がインポートできません → uv add surya-ocr")
-        return False
-    except Exception as e:
-        print(f"  △ surya-ocr インポート時に警告: {e}")
-        return True
+    print("  - 未導入（任意）。使う場合は uv sync --extra surya を実行してください")
+    return False
+
+
+# 合否に使う必須項目と、表示だけする任意項目（キー → 表示名）
+REQUIRED_CHECKS = {
+    "python": "Python バージョン",
+    "packages": "依存パッケージ",
+    "ollama": "Ollama 接続",
+    "glm_ocr": "GLM-OCR モデル",
+}
+OPTIONAL_CHECKS = {
+    "surya": "Surya OCR（任意）",
+}
 
 
 def main():
+    """環境を確認して結果を表示する。必須項目がすべて合格なら 0、それ以外は 1。"""
     print("=" * 50)
     print("戦前日本語OCR — 環境チェック")
     print("=" * 50)
@@ -139,26 +160,23 @@ def main():
         print("  - スキップ（Ollama 未接続）")
         results["glm_ocr"] = False
 
-    print("\n[5/5] Surya OCR")
+    print("\n[5/5] Surya OCR（任意）")
     results["surya"] = check_surya()
 
     # 結果サマリー
     print("\n" + "=" * 50)
     print("結果サマリー")
     print("=" * 50)
-    labels = {
-        "python": "Python バージョン",
-        "packages": "依存パッケージ",
-        "ollama": "Ollama 接続",
-        "glm_ocr": "GLM-OCR モデル",
-        "surya": "Surya OCR",
-    }
     all_ok = True
-    for key, label in labels.items():
+    for key, label in REQUIRED_CHECKS.items():
         status = "✓" if results[key] else "✗"
         print(f"  {status} {label}")
         if not results[key]:
             all_ok = False
+    # 任意項目は未導入でも ✗ にせず、合否にも数えない
+    for key, label in OPTIONAL_CHECKS.items():
+        status = "✓" if results[key] else "−（未導入）"
+        print(f"  {status} {label}")
 
     if all_ok:
         print("\n🎉 すべてのチェックをパスしました！ Step 2 に進めます。")
@@ -171,7 +189,3 @@ def main():
 def run(args=None) -> int:
     """統合CLI（prewar check）用アダプタ。引数は受け取るが使用しない。"""
     return main()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
