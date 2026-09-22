@@ -30,7 +30,7 @@ OCRパイプラインの経路を1本化してテストの安全網を張り、�
 特に `surya-ocr` は `prewar check` で「import できるか」を見るだけなのに、torch 等を引き込んで
 `.venv` の7割超を占めていた。`chunk.overlap` は設定しても分割処理に一切効いていなかった。
 
-**やったこと**（設計と詳細は `openspec/changes/` 配下の g8-dead-code-cleanup、事前調査は `survey/g8-dead-code-survey.md`）
+**やったこと**（設計と詳細は `openspec/changes/archive/2026-09-22-g8-dead-code-cleanup/`、事前調査は `survey/g8-dead-code-survey.md`）
 
 | 対応 | 実装場所 |
 |---|---|
