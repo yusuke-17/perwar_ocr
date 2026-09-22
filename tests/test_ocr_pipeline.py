@@ -6,7 +6,7 @@ G7 のリファクタ（1枚処理を複数枚処理へ一本化）の前に書�
 
 Ollama には接続しない。OCRクライアントと口語化器は手書きのフェイクを
 処理の入口のキーワード引数で差し替える（unittest.mock は使わない）。
-仕様: openspec/changes/unify-ocr-pipeline/specs/ocr-pipeline/spec.md
+仕様: openspec/specs/ocr-pipeline/spec.md
 """
 
 import json

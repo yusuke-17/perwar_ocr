@@ -1,6 +1,6 @@
 # prewar-ocr 改善案リスト
 
-最終更新: 2026-08-31（C2・C3完了。ファセットを C2b/C2c として分離）
+最終更新: 2026-09-22（G7・E1完了。OCRパイプラインを1本化しテストの安全網を整備）
 
 現状調査（CLI/全体・OCRパイプライン・検索/ライブラリ）を踏まえた「あったら良さそうな実装案」。
 採用 → 優先順位付け → 設計、の叩き台として使う。
@@ -55,7 +55,7 @@
 
 | #  | 案 | 中身 | 効き | コスト |
 |----|----|------|------|--------|
-| ~~E1~~ ✅ | ~~CLI側のテスト整備~~（実装済み） | 起票時は「scripts/utils 側は皆無」だったが、G2〜G6 の過程で部品単位のテストは揃っていた。欠けていたのは**部品を繋ぐ層**（`process_single`/`process_batch`/`process_folder`）と統合CLI `cli.py`。→ **対応済み**: `tests/test_ocr_pipeline.py`（1枚/複数枚/フォルダの終了コード・保存物・各フラグ・meta.json の固定）と `tests/test_cli.py`（全サブコマンドの振り分け・既定値 Namespace の属性漏れ・choices）を追加。フェイクは `tests/fakes.py` に共有化。G7 の**前に**書いて現行挙動を固定し、リファクタ後も無修正で通ることを確認した。テスト66件追加。詳細は `openspec/changes/unify-ocr-pipeline/` | ★★☆ | 中 |
+| ~~E1~~ ✅ | ~~CLI側のテスト整備~~（実装済み） | 起票時は「scripts/utils 側は皆無」だったが、G2〜G6 の過程で部品単位のテストは揃っていた。欠けていたのは**部品を繋ぐ層**（`process_single`/`process_batch`/`process_folder`）と統合CLI `cli.py`。→ **対応済み**: `tests/test_ocr_pipeline.py`（1枚/複数枚/フォルダの終了コード・保存物・各フラグ・meta.json の固定）と `tests/test_cli.py`（全サブコマンドの振り分け・既定値 Namespace の属性漏れ・choices）を追加。フェイクは `tests/fakes.py` に共有化。G7 の**前に**書いて現行挙動を固定し、リファクタ後も無修正で通ることを確認した。テスト66件追加。詳細は `openspec/changes/archive/2026-09-22-unify-ocr-pipeline/` | ★★☆ | 中 |
 
 ## F. NotebookLM的な対話・要約（新規要望）
 
@@ -80,7 +80,7 @@
 | ~~G4~~ ✅ | ~~OCR呼び出しに temperature/timeout 未指定~~（実装済み） | `ollama_client.py:160-174`。口語化側は `options` を渡すのにOCR側は無指定＝モデル既定 temperature で走り**同じ画像でも結果がぶれる**（OCRは temperature=0 が正）。全 Ollama 呼び出しに timeout が無く、固まると**無限ハング**。→ **対応済み**: `[ocr]`（temperature=0/seed=0）と `[ollama]`（generate 300秒 / list 15秒、0で無制限）を config 化。`ollama_client.py` に `chat_client()`／`list_client()`／`ollama_errors()` を新設し、OCR・口語化・`prewar check` の全経路を timeout 付きに統一。ollama-python が変換しない `httpx.TimeoutException` を `OllamaTimeoutError` に翻訳して `_OCR_ERROR_KINDS` に追加したことで、無応答が G2 の部分保存機構（`pages.skipped` の `reason:"timeout"`・連続失敗打ち切り）にそのまま乗る。使用パラメータは `meta.json` の `ocr.options` に記録。モデル存在確認もページごとから1回に。散在していたエラー変換4コピーを1本化。テスト21件追加 | ★★☆ | 小 |
 | ~~G5~~ ✅ | ~~検索インデックスが口語化後テキストのみ~~（実装済み） | `library_search.py:304-307`。FTS5に入るのは modern.txt（LLMが言い換えた後）だけ。LLMが変えた語は原文の語で検索してもヒットしない。研究アーカイブの再現率を損なう。→ **対応済み**: FTS に `original` カラムを追加し、`normalize_text(ocr_raw.txt)` を索引。正規化後テキストはファイル保存されていないため索引時に再計算する（`diff_viewer.py` と同じ手法。決定的・外部依存なし・既存文書に遡って効く）。あわせて FTS の `title` にも正規化を適用（表示用の題名は生のまま保持）。スニペットを `snippet(search, -1, ...)` にして**実際に一致したカラム**から抜粋し、`highlight()` のマーカ有無で `matched_fields` を判定。「原文のみ一致＝口語化で語が変わった箇所」を CLI とJSONに出す。実測: DBサイズ 1.57倍・全件再構築 0.5ms/件。詳細は `openspec/changes/search-index-original-text/` | ★★☆ | 小〜中 |
 | ~~G6~~ ✅ | ~~差分更新が meta.json の mtime のみ判定~~（実装済み） | `library_search.py:108-133`。索引対象は modern.txt なのに変更検知は meta.json の mtime だけ。**modern.txt を手修正しても再インデックスされず**古い本文で検索し続ける。→ **対応済み**: `meta.json` / `modern.txt` / `ocr_raw.txt` の mtime を連結した署名文字列（`source_sig`）の**一致比較**に置き換え。最大mtime比較ではなく文字列一致にしたのは、ファイルを古い版に戻したとき（mtimeが小さくなるとき）も検知するため。G5で索引スキーマが変わるタイミングに相乗りして再構築1回で済ませた | ★★☆ | 小 |
-| ~~G7~~ ✅ | ~~`process_single`／`process_batch` の大量重複~~（実装済み） | `ocr_vision_llm.py`（G2後は 568-663 と 666-786）。正規化・口語化・レコード生成がほぼ丸ごとコピペ。片方だけ直して反映漏れ→バグ温床。→ **対応済み**: `process_single` を `process_batch(args, [path])` への委譲にして経路を1本化。`save_document` が枚数と失敗有無だけで出力を出し分けるため、**1枚を複数枚経路に流しても meta.json とファイル構成は不変**（特性テストで確認）。`process_batch` は `_normalize_step`／`_build_record`（純粋関数）／`_save_outputs`／`_exit_code`（純粋関数）に分割。1枚用の旧形式保存を廃止し `_save_legacy` に一本化。テスト用に `client`/`modernizer` をキーワード引数で注入可能に。**唯一の挙動変更**: 1枚処理のOCR失敗時にも失敗のまとめと再試行の案内を出す（従来は無言で終了）。詳細は `openspec/changes/unify-ocr-pipeline/` | ★★☆ | 中 |
+| ~~G7~~ ✅ | ~~`process_single`／`process_batch` の大量重複~~（実装済み） | `ocr_vision_llm.py`（G2後は 568-663 と 666-786）。正規化・口語化・レコード生成がほぼ丸ごとコピペ。片方だけ直して反映漏れ→バグ温床。→ **対応済み**: `process_single` を `process_batch(args, [path])` への委譲にして経路を1本化。`save_document` が枚数と失敗有無だけで出力を出し分けるため、**1枚を複数枚経路に流しても meta.json とファイル構成は不変**（特性テストで確認）。`process_batch` は `_normalize_step`／`_build_record`（純粋関数）／`_save_outputs`／`_exit_code`（純粋関数）に分割。1枚用の旧形式保存を廃止し `_save_legacy` に一本化。テスト用に `client`/`modernizer` をキーワード引数で注入可能に。**唯一の挙動変更**: 1枚処理のOCR失敗時にも失敗のまとめと再試行の案内を出す（従来は無言で終了）。詳細は `openspec/changes/archive/2026-09-22-unify-ocr-pipeline/` | ★★☆ | 中 |
 | G9 | 口語化チャンクにもフェイルファストが無い | G4 で全 Ollama 呼び出しに timeout（既定300秒）が付いたが、`text_modernizer.py` は `keep_original` で全チャンクを試し切る。Ollama が無応答のまま50チャンクあると 300秒×50＝4時間待つ。OCR側の `batch.abort_after_consecutive_failures` と同型の `chunk.abort_after_consecutive_failures` を入れて連続失敗で打ち切る。→ G4の実装で顕在化した積み残し（従来はチャンク1で無限ハングしていたので純粋な改善ではある） | ★★☆ | 小 |
 | G10 | 旧字体変換表に穴がある（「內」→「内」等が未変換） | G5 の実装中に発見。`senzen_word.kanji.convert_old_kanji` は「關→関」「錄→録」「當→当」は変換するが、**「內」U+5167 →「内」U+5185 を変換しない**。旧字体の題名・本文が現代表記のクエリで引けない箇所が残る（G3で変体仮名表を機械生成で修復したのと同型の問題）。→ Unicode の異体字データや JIS の新旧字体対応表と全件照合し、`tools/gen_hentaigana.py` と同じく**機械生成**で穴を塞ぐ。手作業で1字ずつ足すと同じ穴が再発する。変換表を変えたら `library_search.INDEX_SCHEMA_VERSION` を上げること（索引の作り直しが要る） | ★★☆ | 中 |
 | G8 | デッドコード・不要依存の整理 | `chunk.overlap`（config/param/コメントにあるが `_split_text` で未使用＝効くと誤解を招く）、`requests`（pyproject にあるが import 0件）、`surya-ocr`（実処理未使用の重量級必須依存）。→ overlap は実装 or 削除、requests は依存から除去、surya は optional グループへ | ★★☆ | 小 |

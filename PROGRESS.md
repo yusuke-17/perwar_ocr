@@ -31,7 +31,7 @@ OCRパイプラインの経路を1本化してテストの安全網を張った�
 部品単位のテストはあったが、**部品を繋ぐ層と統合CLI にはテストが無く**、
 リファクタで壊しても気づけなかった。
 
-**やったこと**（設計と詳細は `openspec/changes/unify-ocr-pipeline/`、事前調査は `survey/g7-e1-pipeline-refactor-survey.md`）
+**やったこと**（設計と詳細は `openspec/changes/archive/2026-09-22-unify-ocr-pipeline/`、事前調査は `survey/g7-e1-pipeline-refactor-survey.md`）
 
 | 順 | 対応 | 実装場所 |
 |---|---|---|
