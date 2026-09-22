@@ -9,7 +9,7 @@ context: |
   基幹パイプライン: 画像 → GLM-OCR → senzen_word正規化 → qwen3.5口語化 → library保存 → FTS5全文検索
 
   技術スタック: Python 3.13+ / uv。Python実行は必ず `uv run` 経由。
-  OCR: Ollama + GLM-OCR（メイン・0.9B）/ Surya OCR（補助・比較用）。LLM: qwen3.5:9b（Ollama経由）。
+  OCR: Ollama + GLM-OCR（0.9B）。Surya OCR は任意の追加依存（uv sync --extra surya）で、現状の処理には未使用。LLM: qwen3.5:9b（Ollama経由）。
   テスト: `uv run pytest tests/ pkg/`
 
   【絶対制約】完全ローカル実行:

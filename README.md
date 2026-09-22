@@ -34,9 +34,16 @@ ollama pull qwen3.5:9b
 # uv のインストール（未導入の場合）
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 依存パッケージのインストール
-cd ~/Desktop/prewar-ocr
+# 依存パッケージのインストール（このリポジトリのフォルダで実行）
+cd prewar-ocr
 uv sync
+```
+
+補助OCRの Surya OCR は任意の追加依存で、通常の `uv sync` では入らない（torch 等を含み約500MBあるため）。
+現状の OCR 処理では使っていない。試したい場合だけ次で導入する。
+
+```bash
+uv sync --extra surya
 ```
 
 ### 4. セットアップ確認
@@ -50,7 +57,7 @@ uv run prewar check
 すべての機能は `prewar` コマンド1つに集約されている。**コマンドを覚えていなくても、引数なしで実行すれば対話メニューが出る**ので、矢印キーで選ぶだけでよい。
 
 ```bash
-# 対話メニュー（OCR / 撮りため / 検索 / 口語体変換 / 環境確認 を矢印キーで選択）
+# 対話メニュー（OCR / 撮りため / 検索 / 口語体変換 / 差分表示 / データ整理 / 環境確認 を矢印キーで選択）
 uv run prewar
 ```
 
@@ -64,6 +71,8 @@ uv run prewar
 | 検索インデックス更新 | `uv run prewar index` |
 | ライブラリ統計 | `uv run prewar stat` |
 | テキスト後処理（正規化/口語体化） | `uv run prewar fix output/x.txt` |
+| 変換前後の差分を見る | `uv run prewar diff <ドキュメントID>` |
+| データ整理（input 掃除 / 誤記録削除） | `uv run prewar clean input` / `uv run prewar clean library` |
 | 環境確認 | `uv run prewar check` |
 
 ```bash
@@ -74,7 +83,14 @@ uv run prewar ocr
 uv run prewar ocr input/画像.png
 ```
 
-> 旧コマンド `uv run prewar-ocr` / `uv run prewar-library` も後方互換でそのまま使える。
+> 旧コマンド `prewar-ocr` / `prewar-library` は廃止した。次のように置き換える。
+>
+> | 旧コマンド | 新コマンド |
+> |---|---|
+> | `uv run prewar-ocr ...` | `uv run prewar ocr ...` |
+> | `uv run prewar-ocr shoot ...` | `uv run prewar shoot ...` |
+> | `uv run prewar-library find ...` | `uv run prewar search ...` |
+> | `uv run prewar-library index` / `stat` | `uv run prewar index` / `uv run prewar stat` |
 
 実行すると `library/{YYYY-MM-DD}_{画像名}/` フォルダが作られ、1回の処理結果が「1件の記録」として保存される。
 
@@ -298,15 +314,48 @@ uv run prewar stat
 
 文書数・インデックスサイズ・最終更新日が表示される。
 
+## 変換前後の差分表示
+
+OCR 結果がどう書き換えられたかを、2段階に分けて色付きで表示する。
+特に LLM による口語化で語が勝手に変わった箇所（誤変換）を目視で見つけるために使う。
+
+| 段階 | 比べるもの |
+|---|---|
+| 1 | OCR生テキスト → 正規化後（旧字体・仮名の機械変換） |
+| 2 | 正規化後 → `modern.txt`（LLM による口語化） |
+
+```bash
+uv run prewar diff 2026-05-24_画像名             # 2段階とも表示
+uv run prewar diff 2026-05-24_画像名 --stage 2   # LLM変換だけ
+uv run prewar diff 2026-05-24_画像名 --no-color  # 色なし（[-削除-]{+追加+} 表記）
+uv run prewar diff 2026-05-24_画像名 --context 0 # 全文表示
+```
+
+## データ整理
+
+```bash
+# input/ の処理済み画像・セッションフォルダを掃除（library の記録には影響しない）
+uv run prewar clean input
+
+# 誤った記録を library/ から削除し、検索インデックスからも消す
+uv run prewar clean library                     # 一覧から選ぶ
+uv run prewar clean library 2026-05-24_画像名    # ドキュメントIDを指定
+```
+
+削除はゴミ箱を経由しない完全削除で、実行前に必ず確認を求める（`--yes` で省略）。
+
 ## フォルダ構成
 
-| フォルダ | 用途 |
+| 場所 | 用途 |
 |----------|------|
 | `input/` | OCR対象の画像ファイルを置く |
 | `library/` | 処理結果の蓄積先（1文書＝1フォルダ） |
 | `output/` | `--legacy-output` 指定時の旧形式出力先 |
-| `scripts/` | OCR実行スクリプト |
+| `scripts/` | CLI（統合コマンド `prewar` と各サブコマンドの中身） |
 | `utils/` | OCR・正規化・口語体変換・ライブラリ保存などのユーティリティ |
 | `pkg/senzen_word/` | 旧字体・仮名変換ライブラリ（自作PyPIパッケージ） |
-| `plan/` | 実装計画 |
+| `tests/` | テスト（`uv run pytest tests/ pkg/`） |
+| `config.toml` | 設定の上書き（既定値から変えたい値だけを書く） |
+| `openspec/` | 仕様（`specs/`）と進行中の変更（`changes/`） |
+| `plan/` | 改善案のバックログ |
 | `survey/` | 調査レポート |

@@ -33,16 +33,16 @@
 
 ## 5. ドキュメントの修正
 
-- [ ] 5.1 `pkg/senzen_word/README.md` を直す: 旧字体の字数・歴史的仮名遣いのパターン数・`convert` の例を実際に計測・実行した値にし、`find_*`・`get_kanji_table`・`tools/gen_hentaigana.py`・テストの実行方法を追記する。記載した例をすべて `uv run python -c` で実行して一致を確認する
-- [ ] 5.2 `README.md` を直す: 後方互換の注記を旧コマンドからの置き換え表に差し替え、配置パス（`~/Desktop/...`）、`plan/` の説明、フォルダ構成表（`openspec/`・`tests/`・`config.toml`）、`prewar diff` / `prewar clean` の説明、Surya を使う場合の `uv sync --extra surya` を反映する。記載したコマンドを `--help` で実在確認する
-- [ ] 5.3 `CLAUDE.md` を直す: Surya の位置づけ（任意の追加依存・現状 OCR には未使用）、旧コマンド残存の記述の削除、対話メニューの列挙（差分表示・データ整理）、config のセクション列挙（preprocess / progress / batch / diff）
-- [ ] 5.4 `openspec/config.yaml` の Surya の記述を 5.3 と同じ位置づけに直す
-- [ ] 5.5 `plan/improvement-ideas.md` を直す: archive 済み変更へのパス、A4 の誤読辞書の件数（`utils/text_normalizer.py` で数え直す）、A2 の「Surya も依存済み」を「extra `surya` で導入可能」に、G9 の設定キー名が既存の `batch.abort_after_consecutive_failures` と紛らわしい点の注記、G8 を実装済みに移す
-- [ ] 5.6 `plan/implementation_plan.md` の冒頭に「OpenSpec 導入前の初期計画。現状の構成とは異なる」旨の注記を入れる
-- [ ] 5.7 `PROGRESS.md` を直す: archive 済み変更へのパス、コマンド一覧への `prewar diff` / `prewar clean` の追加、G8 の完了と次の候補の更新
-- [ ] 5.8 `git grep -n "prewar-ocr \|prewar-library\|search-index-original-text/\|search-query-expression/"` で、archive 配下と `survey/` 以外に古い参照が残っていないことを確認する
+- [x] 5.1 `pkg/senzen_word/README.md` を直す: 旧字体の字数・歴史的仮名遣いのパターン数・`convert` の例を実際に計測・実行した値にし、`find_*`・`get_kanji_table`・`tools/gen_hentaigana.py`・テストの実行方法を追記する。記載した例をすべて `uv run python -c` で実行して一致を確認する
+- [x] 5.2 `README.md` を直す: 後方互換の注記を旧コマンドからの置き換え表に差し替え、配置パス（`~/Desktop/...`）、`plan/` の説明、フォルダ構成表（`openspec/`・`tests/`・`config.toml`）、`prewar diff` / `prewar clean` の説明、Surya を使う場合の `uv sync --extra surya` を反映する。記載したコマンドを `--help` で実在確認する
+- [x] 5.3 `CLAUDE.md` を直す: Surya の位置づけ（任意の追加依存・現状 OCR には未使用）、旧コマンド残存の記述の削除、対話メニューの列挙（差分表示・データ整理）、config のセクション列挙（preprocess / progress / batch / diff）
+- [x] 5.4 `openspec/config.yaml` の Surya の記述を 5.3 と同じ位置づけに直す
+- [x] 5.5 `plan/improvement-ideas.md` を直す: archive 済み変更へのパス、A4 の誤読辞書の件数（`utils/text_normalizer.py` で数え直す）、A2 の「Surya も依存済み」を「extra `surya` で導入可能」に、G9 の設定キー名が既存の `batch.abort_after_consecutive_failures` と紛らわしい点の注記、G8 を実装済みに移す
+- [x] 5.6 `plan/implementation_plan.md` の冒頭に「OpenSpec 導入前の初期計画。現状の構成とは異なる」旨の注記を入れる
+- [x] 5.7 `PROGRESS.md` を直す: archive 済み変更へのパス、コマンド一覧への `prewar diff` / `prewar clean` の追加、G8 の完了と次の候補の更新
+- [x] 5.8 `git grep -n "prewar-ocr \|prewar-library\|search-index-original-text/\|search-query-expression/"` で、archive 配下と `survey/` 以外に古い参照が残っていないことを確認する
 
 ## 6. 最終確認
 
-- [ ] 6.1 `uv run pytest tests/ pkg/ -q` が全件通り、`uv run prewar check`・`uv run prewar search --help`・引数なしの `uv run prewar` のメニュー表示が期待どおりであることを確認する
-- [ ] 6.2 `du -sh .venv` を 1.1 の値と比べて削減量を記録し（PROGRESS.md に1行）、ドキュメント修正をコミットする
+- [x] 6.1 `uv run pytest tests/ pkg/ -q` が全件通り、`uv run prewar check`・`uv run prewar search --help`・引数なしの `uv run prewar` のメニュー表示が期待どおりであることを確認する
+- [x] 6.2 `du -sh .venv` を 1.1 の値と比べて削減量を記録し（PROGRESS.md に1行）、ドキュメント修正をコミットする
