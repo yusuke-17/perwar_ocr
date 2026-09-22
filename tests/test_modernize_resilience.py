@@ -166,5 +166,6 @@ def test_empty_body_returns_as_is():
     result = m.modernize_detailed("# タイトルのみ\n")
 
     assert result.chunk_total == 0
-    assert result.ok is True
+    assert result.failures == []
+    assert result.aborted is False
     assert m.calls == 0

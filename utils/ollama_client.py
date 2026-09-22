@@ -37,7 +37,6 @@ class OCRResult:
     image_path: str  # 処理した画像のパス
     elapsed_seconds: float  # 処理にかかった秒数
     prompt: str  # 使用したプロンプト
-    raw_response: dict = field(default_factory=dict)  # Ollamaの生レスポンス情報
     options: dict = field(default_factory=dict)  # 実際に渡した生成パラメータ
 
 
@@ -202,7 +201,7 @@ class OllamaOCRClient:
         options = ocr_options()
 
         start_time = time.time()
-        text, raw_info = self._call_ollama(path, options)
+        text = self._call_ollama(path, options)
         elapsed = time.time() - start_time
 
         return OCRResult(
@@ -211,18 +210,8 @@ class OllamaOCRClient:
             image_path=str(path),
             elapsed_seconds=elapsed,
             prompt=self.prompt,
-            raw_response=raw_info,
             options=options,
         )
-
-    def is_available(self) -> bool:
-        """Ollamaサーバーに接続でき、指定モデルが利用可能かチェック"""
-        try:
-            # 明示的な可用性チェックなので、メモを無視して必ず問い合わせる
-            self._check_model_available(force=True)
-            return True
-        except (OllamaConnectionError, OllamaModelNotFoundError, OllamaTimeoutError):
-            return False
 
     def list_models(self) -> list[str]:
         """インストール済みモデルの一覧を返す"""
@@ -248,14 +237,14 @@ class OllamaOCRClient:
 
         return path
 
-    def _check_model_available(self, *, force: bool = False) -> None:
+    def _check_model_available(self) -> None:
         """指定モデルがOllamaにインストール済みかチェック
 
         成功したら記憶し、同じクライアントでは2回目以降スキップする
         （バッチでページ数ぶん ollama.list() を投げないため）。
         失敗は記憶しないので、モデル未インストールなら毎回ちゃんと raise する。
         """
-        if self._model_checked and not force:
+        if self._model_checked:
             return
 
         model_names = self.list_models()
@@ -270,7 +259,7 @@ class OllamaOCRClient:
 
         self._model_checked = True
 
-    def _call_ollama(self, image_path: Path, options: dict) -> tuple[str, dict]:
+    def _call_ollama(self, image_path: Path, options: dict) -> str:
         """Ollama APIを呼び出してOCR結果を取得する
 
         Args:
@@ -290,13 +279,4 @@ class OllamaOCRClient:
                 options=options,
             )
 
-        text = response.message.content.strip()
-
-        raw_info = {
-            "total_duration_ns": getattr(response, "total_duration", None),
-            "prompt_eval_count": getattr(response, "prompt_eval_count", None),
-            "eval_count": getattr(response, "eval_count", None),
-            "eval_duration_ns": getattr(response, "eval_duration", None),
-        }
-
-        return text, raw_info
+        return response.message.content.strip()

@@ -18,8 +18,8 @@
     uv run prewar check                # 環境チェック
 
 各機能の中身は既存スクリプト（ocr_vision_llm / library / postprocess /
-setup_check）に委譲する。引数定義は各スクリプトの add_arguments を流用し、
-二重管理を避ける。既存の prewar-ocr / prewar-library は後方互換で残る。
+setup_check 等）に委譲する。引数定義は各スクリプトの add_arguments を流用し、
+二重管理を避ける。起動コマンドはこの `prewar` だけ。
 """
 
 import argparse
@@ -88,39 +88,44 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command")
 
-    # ocr（= prewar-ocr）
+    # ocr（→ ocr_vision_llm）
     p_ocr = sub.add_parser("ocr", help="画像をOCRして現代語化")
     ocr_vision_llm.add_arguments(p_ocr)
     p_ocr.set_defaults(func=ocr_vision_llm.run)
 
-    # shoot（= prewar-ocr shoot）
+    # shoot（→ ocr_vision_llm の撮りため）
     p_shoot = sub.add_parser("shoot", help="範囲スクショを撮りため一括処理（macOS）")
     ocr_vision_llm.add_arguments(p_shoot)
     p_shoot.set_defaults(func=_run_shoot)
 
-    # search（= prewar-library find）
-    p_search = sub.add_parser("search", help="ライブラリを全文検索")
+    # search（→ library.cmd_find）。検索構文の説明を --help に出す
+    p_search = sub.add_parser(
+        "search",
+        help="ライブラリを全文検索",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=library.SEARCH_HELP_EPILOG,
+    )
     library.add_find_arguments(p_search)
     library.add_library_root_argument(p_search)
     p_search.set_defaults(func=_run_search)
 
-    # index（= prewar-library index）
+    # index（→ library.cmd_index）
     p_index = sub.add_parser("index", help="検索インデックスを更新")
     library.add_index_arguments(p_index)
     library.add_library_root_argument(p_index)
     p_index.set_defaults(func=_run_index)
 
-    # stat（= prewar-library stat）
+    # stat（→ library.cmd_stat）
     p_stat = sub.add_parser("stat", help="ライブラリの統計情報を表示")
     library.add_library_root_argument(p_stat)
     p_stat.set_defaults(func=_run_stat)
 
-    # fix（= postprocess）
+    # fix（→ postprocess）
     p_fix = sub.add_parser("fix", help="OCRテキストを正規化/口語体化")
     postprocess.add_arguments(p_fix)
     p_fix.set_defaults(func=postprocess.run)
 
-    # diff（= diff_viewer）
+    # diff（→ diff_viewer）
     p_diff = sub.add_parser("diff", help="変換前後の差分を色付き表示")
     diff_viewer.add_arguments(p_diff)
     library.add_library_root_argument(p_diff)
@@ -134,7 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
     library.add_library_root_argument(p_clean)
     p_clean.set_defaults(func=clean.run)
 
-    # check（= setup_check）
+    # check（→ setup_check）
     p_check = sub.add_parser("check", help="環境を確認する")
     p_check.set_defaults(func=setup_check.run)
 

@@ -9,6 +9,10 @@ build/
 .venv/
 .python-version
 
+# テスト・リンタのキャッシュ
+.pytest_cache/
+.ruff_cache/
+
 # 環境変数・機密情報
 .env
 

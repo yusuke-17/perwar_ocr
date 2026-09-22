@@ -7,16 +7,16 @@
 処理結果は library/{YYYY-MM-DD}_{slug}/ に「1件の記録」として保存される
 （元画像コピー・OCR生テキスト・現代語テキスト・meta.json）。
 
-使い方:
-    uv run prewar-ocr                                # 対話モード（input/から画像を選択）
-    uv run prewar-ocr input/画像.png                  # 直接指定（1枚）
-    uv run prewar-ocr shoot                          # 範囲スクショを撮りため → 終了時に一括処理（macOS）
-    uv run prewar-ocr shoot --no-run                 # 撮るだけ（処理は後回し）
-    uv run prewar-ocr input/session_.../             # 貯めたフォルダを1記録として一括処理
-    uv run prewar-ocr input/session_.../ --separate  # フォルダ内を画像ごとの別記録として処理
-    uv run prewar-ocr input/画像.png --no-modernize   # 口語体変換をスキップ
-    uv run prewar-ocr input/画像.png --legacy-output  # 旧 output/*_modern.txt も併存
-    uv run prewar-ocr input/画像.png --no-save        # 保存をスキップ（コンソール出力のみ）
+使い方（統合CLI scripts/cli.py の ocr / shoot から呼ばれる）:
+    uv run prewar ocr                                # 対話モード（input/から画像を選択）
+    uv run prewar ocr input/画像.png                  # 直接指定（1枚）
+    uv run prewar shoot                              # 範囲スクショを撮りため → 終了時に一括処理（macOS）
+    uv run prewar shoot --no-run                     # 撮るだけ（処理は後回し）
+    uv run prewar ocr input/session_.../             # 貯めたフォルダを1記録として一括処理
+    uv run prewar ocr input/session_.../ --separate  # フォルダ内を画像ごとの別記録として処理
+    uv run prewar ocr input/画像.png --no-modernize   # 口語体変換をスキップ
+    uv run prewar ocr input/画像.png --legacy-output  # 旧 output/*_modern.txt も併存
+    uv run prewar ocr input/画像.png --no-save        # 保存をスキップ（コンソール出力のみ）
 
 終了コード:
     0  全ページ成功（保存済み）
@@ -26,7 +26,6 @@
 """
 
 import argparse
-import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -153,24 +152,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
             "skip=失敗ページを飛ばして続行（既定）、abort=その場で中断"
         ),
     )
-
-
-def parse_args() -> argparse.Namespace:
-    """コマンドライン引数をパースする"""
-    parser = argparse.ArgumentParser(
-        description="戦前日本語OCR — 画像から現代日本語テキストを生成",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-使用例:
-  uv run python scripts/ocr_vision_llm.py input/画像.png
-  uv run python scripts/ocr_vision_llm.py input/画像.png --no-modernize
-  uv run python scripts/ocr_vision_llm.py input/画像.png --legacy-output
-  uv run python scripts/ocr_vision_llm.py input/画像.png --library-root mylib/
-  uv run python scripts/ocr_vision_llm.py input/画像.png --no-save
-        """,
-    )
-    add_arguments(parser)
-    return parser.parse_args()
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
@@ -831,7 +812,7 @@ def cmd_shoot(args: argparse.Namespace) -> int:
         print("✗ 範囲スクショ撮影（shoot）は macOS 専用です。")
         print(
             "  他OSでは、画像を input/ に置いてから "
-            "`uv run prewar-ocr <画像 or フォルダ>` で処理してください。"
+            "`uv run prewar ocr <画像 or フォルダ>` で処理してください。"
         )
         return 1
 
@@ -849,7 +830,7 @@ def cmd_shoot(args: argparse.Namespace) -> int:
 
     if args.no_run:
         print(f"\n撮影のみ完了しました（--no-run）。後で処理するには:")
-        print(f"  uv run prewar-ocr {session_dir}/")
+        print(f"  uv run prewar ocr {session_dir}/")
         return 0
 
     return process_folder(args, session_dir)
@@ -884,11 +865,3 @@ def run(args: argparse.Namespace) -> int:
             return 1
         return process_batch(args, selected)
 
-
-def main() -> int:
-    """メインエントリポイント"""
-    return run(parse_args())
-
-
-if __name__ == "__main__":
-    sys.exit(main())

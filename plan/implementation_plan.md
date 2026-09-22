@@ -3,6 +3,13 @@
 作成日: 2026-02-10
 改訂日: 2026-02-14
 
+> **注記（2026-09-22）**: OpenSpec 導入前の初期計画であり、現状の構成とは異なる。
+> ここにあるファイル（`ocr_surya.py`、`ocr_compare.py`、`pipeline.py`、`utils/char_converter.py` など）の多くは作られていない。
+> 前処理は `utils/image_preprocessor.py`、文字変換は `pkg/senzen_word/` に実装された。
+> Surya OCR は任意の追加依存になり、`requests` は依存から外した。
+> 現状は `README.md`、仕様は `openspec/specs/`、改善案は `plan/improvement-ideas.md` を参照。
+> 本文は当時の記録として書き換えずに残す。
+
 ---
 
 ## Context（なぜこの変更が必要か）

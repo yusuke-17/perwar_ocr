@@ -40,7 +40,6 @@ _DEFAULTS: dict[str, Any] = {
     "paths": {"input": "input", "output": "output", "library": "library"},
     "chunk": {
         "size": 2000,
-        "overlap": 200,
         # 口語体変換で1チャンクが失敗したときの方針
         #   "keep_original": 原文のまま採用して続行（既定。文字を欠けさせない）
         #   "abort":         例外を投げて変換全体を中止（従来の挙動）

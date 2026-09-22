@@ -4,27 +4,27 @@
 テキスト正規化（旧字体変換・仮名変換・OCR誤読修正等）を行う。
 --modernize オプションでLLMによる文語体→口語体リライトも実行可能。
 
-使い方:
+使い方（統合CLI scripts/cli.py の fix から呼ばれる）:
     # テキストファイル1つを変換
-    uv run python scripts/postprocess.py output/sample_ocr.txt
+    uv run prewar fix output/sample_ocr.txt
 
     # 変換結果を別ファイルに保存
-    uv run python scripts/postprocess.py output/sample_ocr.txt -o output/sample_modern.txt
+    uv run prewar fix output/sample_ocr.txt -o output/sample_modern.txt
 
     # フォルダ内の全 .txt を一括変換
-    uv run python scripts/postprocess.py output/ -o output_converted/
+    uv run prewar fix output/ -o output_converted/
 
     # 正規化をスキップ（LLMリライトのみ）
-    uv run python scripts/postprocess.py output/sample_ocr.txt --no-normalize --modernize
+    uv run prewar fix output/sample_ocr.txt --no-normalize --modernize
 
     # 変換前後の差分を表示
-    uv run python scripts/postprocess.py output/sample_ocr.txt --diff
+    uv run prewar fix output/sample_ocr.txt --diff
 
     # LLMで文語体→口語体にリライト
-    uv run python scripts/postprocess.py output/sample_ocr.txt --modernize
+    uv run prewar fix output/sample_ocr.txt --modernize
 
     # リライト用モデルを変更
-    uv run python scripts/postprocess.py output/sample_ocr.txt --modernize --modernize-model qwen3:8b
+    uv run prewar fix output/sample_ocr.txt --modernize --modernize-model qwen3:8b
 
 終了コード:
     0  全ファイル成功
@@ -33,7 +33,6 @@
 """
 
 import argparse
-import sys
 from pathlib import Path
 
 from utils.config import CONFIG
@@ -174,22 +173,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="OCR出力テキストを現代日本語に変換する",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-使用例:
-  uv run python scripts/postprocess.py output/sample_ocr.txt
-  uv run python scripts/postprocess.py output/ -o output_converted/
-  uv run python scripts/postprocess.py output/sample_ocr.txt --diff
-  uv run python scripts/postprocess.py output/sample_ocr.txt --modernize
-        """,
-    )
-    add_arguments(parser)
-    return parser.parse_args()
-
-
 def run(args: argparse.Namespace) -> int:
     input_path = Path(args.input)
     normalize = not args.no_normalize
@@ -270,10 +253,3 @@ def run(args: argparse.Namespace) -> int:
     print("\n完了!")
     return 0
 
-
-def main() -> int:
-    return run(parse_args())
-
-
-if __name__ == "__main__":
-    sys.exit(main())

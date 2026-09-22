@@ -252,16 +252,6 @@ def test_model_check_runs_once_per_client(tmp_path, fake_ollama):
     assert listing.calls == 1
 
 
-def test_is_available_always_asks(tmp_path, fake_ollama):
-    """明示的な可用性チェックはメモを無視して毎回問い合わせる"""
-    _, listing = fake_ollama
-    client = OllamaOCRClient()
-
-    client.ocr(_dummy_png(tmp_path))
-    assert client.is_available()
-
-    assert listing.calls == 2
-
 
 def test_missing_model_is_not_memoized(tmp_path, monkeypatch):
     """モデルが無い場合は記憶せず毎回raiseする（失敗を握りつぶさない）"""

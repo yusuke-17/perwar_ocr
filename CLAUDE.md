@@ -7,15 +7,15 @@
 ## 技術スタック
 - Python 3.13+ / uv（パッケージ管理）
 - Ollama + GLM-OCR（メインOCRエンジン、0.9B）
-- Surya OCR（補助・比較用）
+- Surya OCR（任意の追加依存 `uv sync --extra surya`。現状 OCR 処理には未使用。A2 複数エンジン比較の候補）
 - 後処理: senzen_word（旧字体・仮名変換、自作PyPIパッケージ）、jaconv（全角正規化）、LLMリライト（qwen3.5:9b）
 
 ## よく使うコマンド
 すべての機能は統合CLI `prewar`（`scripts/cli.py`）に集約。引数なしで対話メニュー、
-サブコマンドで直接実行も可。旧 `prewar-ocr` / `prewar-library` は後方互換で残存。
+サブコマンドで直接実行も可。起動コマンドは `prewar` だけ（旧 `prewar-ocr` / `prewar-library` は廃止）。
 
 ```bash
-# 対話メニュー（OCR / 撮りため / 検索 / 口語体変換 / 環境確認）
+# 対話メニュー（OCR / 撮りため / 検索 / 口語体変換 / 差分表示 / データ整理 / 環境確認）
 uv run prewar
 
 # 画像 → OCR → 正規化 → 口語体変換（一括実行）
@@ -28,6 +28,10 @@ uv run prewar stat
 
 # テキスト後処理（正規化/口語体化）
 uv run prewar fix output/x.txt
+
+# 変換前後の差分表示 / データ整理
+uv run prewar diff <doc_id>
+uv run prewar clean input|library
 
 # 環境確認
 uv run prewar check
@@ -42,7 +46,7 @@ uv add <package>
 - `scripts/` - 実行スクリプト（CLI）
 - `utils/` - PJ固有ユーティリティ（Ollama, OCR, LLM等）
 - `input/` / `output/` - 入出力データ（Git管理外）
-- `config.toml` - 設定の上書きファイル（モデル名/パス/チャンク/LLM/OCR/Ollama通信/検索）。Git管理
+- `config.toml` - 設定の上書きファイル（モデル名/パス/チャンク/LLM/OCR/Ollama通信/検索/差分表示/画像前処理/一括処理/進捗表示）。Git管理
 - `openspec/` - 仕様駆動開発（OpenSpec）。`specs/` が正の仕様、`changes/` が進行中の変更
 - `plan/` - 改善案バックログ（個別変更の設計は書かない）
 - `survey/` - 調査レポート
