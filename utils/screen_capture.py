@@ -97,7 +97,7 @@ def shoot_session(input_dir: Path) -> list[Path] | None:
     撮った順 = ページ順として p001.png, p002.png ... と連番で保存する。
 
     Returns:
-        撮影した画像パスのソート済みリスト（1枚以上）。
+        撮影した画像パスのリスト（撮った順＝ページ順、1枚以上）。
         1枚も撮らずに終了した場合は空のセッションフォルダを削除して None。
 
     Raises:
@@ -147,4 +147,4 @@ def shoot_session(input_dir: Path) -> list[Path] | None:
         return None
 
     print(f"\n✓ {len(captured)}枚 撮影しました: {session_dir}/")
-    return sorted(captured)
+    return captured

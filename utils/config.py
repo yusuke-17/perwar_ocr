@@ -76,6 +76,10 @@ _DEFAULTS: dict[str, Any] = {
         "on_page_error": "skip",
         # 連続でこの回数失敗したら打ち切る（Ollama停止時に全ページ待たないため）。0で無効
         "abort_after_consecutive_failures": 3,
+        # 複数枚を1件に結合するときのページ順（--order で実行時に上書き）
+        #   "name":  ファイル名の自然順（既定。2.png は 10.png より前）
+        #   "mtime": 更新日時の古い順（名前がページ順を表していないとき用）
+        "order": "name",
     },
     "progress": {
         "enabled": True,      # 進捗表示(スピナー/バー)のON/OFF。非TTY時は自動でOFF扱い

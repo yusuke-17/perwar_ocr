@@ -47,6 +47,10 @@ modernize = "qwen3.5:9b" # 口語体変換に使うモデル
 # contrast = true         # CLAHEコントラスト強調
 # binarize = "none"       # 二値化方式: "none" | "otsu" | "adaptive"（既定OFF）
 #
+# [batch]                 # 複数枚の一括処理
+# order = "name"          # ページ順: "name"=ファイル名の自然順 | "mtime"=更新日時の古い順
+#                         # （--order で実行時に上書き。撮りためは常に撮った順）
+#
 # [progress]              # 進捗表示（OCR/LLM待ちのスピナー・バー・D2）
 # enabled = true          # 進捗表示のON/OFF（非TTY=パイプ・リダイレクト時は自動OFF）
 # spinner = "dots"        # スピナー種別: "dots" | "line" | "arc" | "bouncingBar"

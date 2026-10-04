@@ -69,6 +69,7 @@ OCR_ARG_NAMES = [
     "no_run",
     "separate",
     "on_page_error",
+    "order",
 ]
 
 
@@ -98,6 +99,17 @@ def test_on_page_error_accepts_valid_values(parser, value):
     assert args.on_page_error == value
 
 
+@pytest.mark.parametrize("value", ["name", "mtime"])
+def test_order_accepts_valid_values(parser, value):
+    args = parser.parse_args(["ocr", "input/p001.png", "--order", value])
+    assert args.order == value
+
+
+def test_order_defaults_to_unspecified(parser):
+    """未指定は None（config.toml の値と区別するため）"""
+    assert parser.parse_args(["ocr", "input/p001.png"]).order is None
+
+
 @pytest.mark.parametrize("value", ["none", "otsu", "adaptive"])
 def test_binarize_accepts_valid_values(parser, value):
     args = parser.parse_args(["ocr", "input/p001.png", "--binarize", value])
@@ -105,7 +117,8 @@ def test_binarize_accepts_valid_values(parser, value):
 
 
 @pytest.mark.parametrize(
-    "option", [["--on-page-error", "retry"], ["--binarize", "sauvola"]]
+    "option",
+    [["--on-page-error", "retry"], ["--binarize", "sauvola"], ["--order", "random"]],
 )
 def test_invalid_choice_is_rejected(parser, option, capsys):
     """選択肢に無い値は argparse がエラーにする（終了コード2）"""
@@ -159,3 +172,65 @@ def test_search_help_explains_query_syntax(parser):
     for expected in ("OR", "NOT", "原文:", "3文字以上", "uv run prewar search"):
         assert expected in help_text
     assert "prewar-library" not in help_text
+
+
+# ---------- ページ順の解決（D5） ----------
+
+
+def _config_returning(monkeypatch, order):
+    """CONFIG の batch.order だけを差し替える（他のキーは本物の値を返す）"""
+    real_get = ocr_vision_llm.CONFIG.get
+
+    def fake_get(key, default=None):
+        if key == "batch.order":
+            return order
+        return real_get(key, default)
+
+    monkeypatch.setattr(ocr_vision_llm.CONFIG, "get", fake_get)
+
+
+def _ocr_args(order=None) -> argparse.Namespace:
+    args = cli._defaults_for(ocr_vision_llm.add_arguments)
+    args.order = order
+    return args
+
+
+def test_order_defaults_to_name_in_config():
+    """設定ファイルに何も書かなければ、既定の並べ方はファイル名の自然順"""
+    assert ocr_vision_llm.CONFIG.get("batch.order") == "name"
+    assert ocr_vision_llm._resolve_order(_ocr_args()) == "name"
+
+
+def test_order_flag_overrides_config(monkeypatch):
+    """実行時のオプション > 設定ファイル"""
+    _config_returning(monkeypatch, "mtime")
+    assert ocr_vision_llm._resolve_order(_ocr_args()) == "mtime"
+    assert ocr_vision_llm._resolve_order(_ocr_args("name")) == "name"
+
+
+def test_invalid_order_in_config_is_an_error(monkeypatch):
+    """設定ファイルの値が未知なら、黙って既定値に戻さず使える値を示すエラーにする"""
+    from utils.config import ConfigError
+
+    _config_returning(monkeypatch, "random")
+    with pytest.raises(ConfigError) as exc:
+        ocr_vision_llm._resolve_order(_ocr_args())
+    assert "name" in str(exc.value) and "mtime" in str(exc.value)
+
+
+def test_run_stops_before_ocr_when_order_in_config_is_invalid(monkeypatch, capsys):
+    """設定が不正なら OCR を始めず（画像を読まず）終了コード 1"""
+    _config_returning(monkeypatch, "random")
+    started: list[object] = []
+    monkeypatch.setattr(
+        ocr_vision_llm, "process_folder", lambda *a, **k: started.append(a) or 0
+    )
+    monkeypatch.setattr(
+        ocr_vision_llm, "process_single", lambda *a, **k: started.append(a) or 0
+    )
+    args = _ocr_args()
+    args.image = "input/p001.png"
+
+    assert ocr_vision_llm.run(args) == 1
+    assert started == []
+    assert "batch.order" in capsys.readouterr().out

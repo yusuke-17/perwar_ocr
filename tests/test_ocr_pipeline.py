@@ -10,6 +10,7 @@ Ollama には接続しない。OCRクライアントと口語化器は手書き�
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -28,7 +29,13 @@ from utils.library_writer import SCHEMA_VERSION, MetaModernize, MetaPageFailure
 from utils.ollama_client import ImageFileError, OCRResult, OllamaConnectionError
 from utils.text_normalizer import normalize_text
 
-from fakes import MODERN_MARK, EchoModernizer, FakeClient, StubModernizer
+from fakes import (
+    MODERN_MARK,
+    EchoModernizer,
+    FakeClient,
+    NameEchoClient,
+    StubModernizer,
+)
 
 # 旧字体（關・狀）とカタカナ助詞（ノ）を含む、戦前公文書らしい1行
 OLD_TEXT = "關東地方ノ狀況"
@@ -451,7 +458,7 @@ def test_single_does_not_show_batch_heading(tmp_path, capsys):
 
 
 def test_batch_still_shows_batch_heading(tmp_path, capsys):
-    """複数枚処理では従来どおり見出しと対象画像を表示する"""
+    """複数枚処理では従来どおり見出しを表示する（対象の一覧は並び順を決める入口が出す）"""
     images = _images(tmp_path / "input", 2)
 
     process_batch(
@@ -460,7 +467,7 @@ def test_batch_still_shows_batch_heading(tmp_path, capsys):
 
     out = capsys.readouterr().out
     assert "処理モード: 複数画像（2枚）" in out
-    assert "対象: p001.png, p002.png" in out
+    assert "対象:" not in out  # 1行のカンマ区切り表示は番号付き一覧に置き換えた
 
 
 def test_single_failure_shows_summary_and_retry_hint(tmp_path, capsys):
@@ -627,3 +634,397 @@ _FAILURE = MetaPageFailure(index=1, source="p001.png", reason="timeout", message
 )
 def test_exit_code(outcome, modern_meta, expected):
     assert _exit_code(outcome, modern_meta) == expected
+
+
+# ---------- ページ順（D5） ----------
+
+
+def _files(folder: Path, names: list[str], mtimes: dict[str, int] | None = None):
+    """名前のリストどおりに画像ファイルを作る（中身は自分の名前）
+
+    mtimes があれば {名前: 更新日時(秒)} を設定する。作らないものは現在時刻のまま。
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for name in names:
+        p = folder / name
+        p.write_bytes(name.encode())
+        if mtimes and name in mtimes:
+            os.utime(p, (mtimes[name], mtimes[name]))
+        paths.append(p)
+    return paths
+
+
+def _sources(doc: Path) -> list[bytes]:
+    """保存された元画像を source_NN の番号順に、中身（元の名前）で返す"""
+    return [p.read_bytes() for p in sorted(doc.glob("source_*"))]
+
+
+def _run_folder(tmp_path, folder, **overrides):
+    return process_folder(
+        _args(tmp_path, **overrides),
+        folder,
+        client=NameEchoClient(),
+        modernizer=EchoModernizer(),
+    )
+
+
+def test_folder_unpadded_numbers_are_combined_in_page_order(tmp_path):
+    """0埋めのない 1.png〜12.png は、本文も保存される画像も 1→12 の順になる"""
+    folder = tmp_path / "input"
+    _files(folder, [f"{i}.png" for i in range(1, 13)])
+
+    code = _run_folder(tmp_path, folder)
+
+    assert code == 0
+    doc = _only_doc(tmp_path)
+    expected = [f"{i}.png" for i in range(1, 13)]
+    assert _sources(doc) == [n.encode() for n in expected]
+    assert _read(doc, "ocr_raw.txt").split("\n\n") == [f"本文:{n}" for n in expected]
+
+
+def test_folder_unpadded_numbers_legacy_output_name(tmp_path):
+    """旧形式の出力名は先頭と末尾のページから作る: 1-12_modern.txt"""
+    folder = tmp_path / "input"
+    _files(folder, [f"{i}.png" for i in range(1, 13)])
+
+    _run_folder(tmp_path, folder, legacy_output=True)
+
+    assert (tmp_path / "output" / "1-12_modern.txt").exists()
+
+
+def test_folder_includes_tif_and_webp(tmp_path):
+    """OCR が受け付ける .tif / .webp も処理対象になり、この順で結合される"""
+    folder = tmp_path / "input"
+    _files(folder, ["1.png", "2.tif", "3.webp"])
+
+    assert _run_folder(tmp_path, folder) == 0
+    assert _sources(_only_doc(tmp_path)) == [b"1.png", b"2.tif", b"3.webp"]
+
+
+def test_folder_ignores_hidden_files_and_directories(tmp_path):
+    """隠しファイル（._1.png）と、画像のような名前のフォルダは対象にしない"""
+    folder = tmp_path / "input"
+    _files(folder, ["1.png", "2.png", "._1.png"])
+    (folder / "old.png").mkdir()
+
+    assert _run_folder(tmp_path, folder) == 0
+    assert _sources(_only_doc(tmp_path)) == [b"1.png", b"2.png"]
+
+
+# --- 並び順の表示 ---
+
+
+def test_folder_prints_numbered_order_before_ocr(tmp_path, capsys):
+    """結合するときは OCR より前に、並べ方と番号付きの一覧を表示する"""
+    folder = tmp_path / "input"
+    _files(folder, ["10.png", "2.png", "1.png"])
+
+    _run_folder(tmp_path, folder)
+
+    out = capsys.readouterr().out
+    assert "並び順: ファイル名順（3枚）" in out
+    assert out.index("1. 1.png") < out.index("2. 2.png") < out.index("3. 10.png")
+    assert out.index("3. 10.png") < out.index("[OCR 1/3]")
+
+
+def test_single_image_prints_no_order_list(tmp_path, capsys):
+    """画像が1枚のときは並び順の一覧を表示しない"""
+    folder = tmp_path / "input"
+    _files(folder, ["1.png"])
+
+    _run_folder(tmp_path, folder)
+
+    assert "並び順:" not in capsys.readouterr().out
+
+
+def test_separate_prints_no_order_list_or_warning(tmp_path, capsys):
+    """画像ごとの別記録では、一覧も食い違いの警告も出さない"""
+    folder = tmp_path / "input"
+    _files(folder, ["1.png", "2.png", "3.png"], {"1.png": 1000, "2.png": 3000, "3.png": 2000})
+
+    _run_folder(tmp_path, folder, separate=True)
+
+    out = capsys.readouterr().out
+    assert "並び順:" not in out
+    assert "食い違" not in out
+
+
+# --- 食い違いの警告 ---
+
+
+def test_folder_warns_on_mismatch_but_continues(tmp_path, capsys):
+    """名前順と更新日時順が食い違っても、警告を出してファイル名順のまま完了する"""
+    folder = tmp_path / "input"
+    _files(folder, ["1.png", "2.png", "3.png"], {"1.png": 1000, "2.png": 3000, "3.png": 2000})
+
+    code = _run_folder(tmp_path, folder)
+
+    assert code == 0  # 警告は終了コードに反映しない
+    out = capsys.readouterr().out
+    assert "食い違っています（2番目から）" in out
+    assert "--order mtime" in out
+    assert out.index("食い違") < out.index("[OCR 1/3]")  # OCR の前に出る
+    assert _sources(_only_doc(tmp_path)) == [b"1.png", b"2.png", b"3.png"]
+
+
+def test_folder_no_warning_when_orders_agree(tmp_path, capsys):
+    folder = tmp_path / "input"
+    _files(folder, ["1.png", "2.png", "10.png"], {"1.png": 1000, "2.png": 2000, "10.png": 3000})
+
+    _run_folder(tmp_path, folder)
+
+    assert "食い違" not in capsys.readouterr().out
+
+
+def test_folder_no_warning_when_all_mtimes_equal(tmp_path, capsys):
+    """更新日時がすべて同じ（zip 展開など）なら警告しない"""
+    folder = tmp_path / "input"
+    _files(folder, ["1.png", "2.png", "10.png"], {n: 5000 for n in ["1.png", "2.png", "10.png"]})
+
+    _run_folder(tmp_path, folder)
+
+    assert "食い違" not in capsys.readouterr().out
+
+
+# --- 並べ方の指定 ---
+
+
+def test_folder_order_mtime_uses_oldest_first_without_warning(tmp_path, capsys):
+    """--order mtime: 更新日時の古い順で結合し、食い違いの警告は出さない"""
+    folder = tmp_path / "input"
+    _files(folder, ["a.png", "b.png"], {"a.png": 2000, "b.png": 1000})
+
+    assert _run_folder(tmp_path, folder, order="mtime") == 0
+
+    assert _sources(_only_doc(tmp_path)) == [b"b.png", b"a.png"]
+    out = capsys.readouterr().out
+    assert "並び順: 更新日時の古い順（2枚）" in out
+    assert "食い違" not in out
+
+
+def test_folder_order_mtime_ties_use_natural_order(tmp_path):
+    """更新日時がすべて同じなら、mtime 指定でも自然順（文字列順ではない）"""
+    folder = tmp_path / "input"
+    names = ["10.png", "2.png", "1.png"]
+    _files(folder, names, {n: 5000 for n in names})
+
+    _run_folder(tmp_path, folder, order="mtime")
+
+    assert _sources(_only_doc(tmp_path)) == [b"1.png", b"2.png", b"10.png"]
+
+
+def test_folder_order_flag_overrides_config(tmp_path, monkeypatch):
+    """設定ファイルで mtime を指定していても、--order name が優先される"""
+    real_get = ocr_vision_llm.CONFIG.get
+    monkeypatch.setattr(
+        ocr_vision_llm.CONFIG,
+        "get",
+        lambda key, default=None: "mtime" if key == "batch.order" else real_get(key, default),
+    )
+    folder = tmp_path / "input"
+    _files(folder, ["a.png", "b.png"], {"a.png": 2000, "b.png": 1000})
+
+    _run_folder(tmp_path, folder, order="name")
+
+    assert _sources(_only_doc(tmp_path)) == [b"a.png", b"b.png"]
+
+
+# --- 撮りため ---
+
+
+def _shoot_args(tmp_path, **overrides):
+    args = _args(tmp_path, **overrides)
+    args.image = "shoot"
+    return args
+
+
+def test_shoot_processes_in_capture_order_regardless_of_order(tmp_path, monkeypatch, capsys):
+    """撮りためは、並べ方が mtime でも撮った順で結合し、食い違いの警告も出さない"""
+    # 撮った順（a, b, c）と、更新日時の順（c, b, a）を食い違わせておく
+    session = tmp_path / "input" / "session_x"
+    captured = _files(
+        session, ["a.png", "b.png", "c.png"], {"a.png": 3000, "b.png": 2000, "c.png": 1000}
+    )
+    monkeypatch.setattr(ocr_vision_llm.screen_capture, "is_supported", lambda: True)
+    monkeypatch.setattr(
+        ocr_vision_llm.screen_capture, "shoot_session", lambda input_dir: captured
+    )
+    received: list[list[Path]] = []
+
+    def fake_batch(args, image_paths, **kwargs):
+        received.append(list(image_paths))
+        return 0
+
+    monkeypatch.setattr(ocr_vision_llm, "process_batch", fake_batch)
+
+    code = ocr_vision_llm.run(_shoot_args(tmp_path, order="mtime"))
+
+    assert code == 0
+    assert received == [captured]  # 撮った順のまま
+    out = capsys.readouterr().out
+    assert "並び順: 撮影順（3枚）" in out
+    assert "食い違" not in out
+
+
+def test_shoot_session_returns_capture_order(tmp_path, monkeypatch):
+    """1000枚撮っても撮った順で返す（文字列順に並べ直すと p1000 が先頭に来てしまう）"""
+    from utils import screen_capture
+
+    total = 1000
+    monkeypatch.setattr(screen_capture, "is_supported", lambda: True)
+    monkeypatch.setattr(
+        screen_capture, "capture_one", lambda dest: dest.write_bytes(b"x") or True
+    )
+    session = tmp_path / "session"
+    session.mkdir()
+    monkeypatch.setattr(screen_capture, "create_session_dir", lambda input_dir: session)
+    answers = iter(["次を撮る"] * (total - 1) + ["終了して処理へ"])
+    monkeypatch.setattr(
+        screen_capture.questionary,
+        "select",
+        lambda *a, **k: _Answer(next(answers)),
+    )
+
+    result = screen_capture.shoot_session(tmp_path)
+
+    assert [p.name for p in result] == [f"p{i:03d}.png" for i in range(1, total + 1)]
+    assert result[-1].name == "p1000.png"
+
+
+# --- 対話メニュー ---
+
+
+class _Answer:
+    """questionary の prompt オブジェクトの代わり（ask() で決まった答えを返す）"""
+
+    def __init__(self, value):
+        self.value = value
+
+    def ask(self):
+        return self.value
+
+
+def _interactive_args(tmp_path, **overrides):
+    args = _args(tmp_path, **overrides)
+    args.image = None
+    return args
+
+
+def _patch_interactive(monkeypatch, selected, answer):
+    """対話の複数選択: 処理モード=複数、選択した画像=selected、食い違い時の答え=answer"""
+    monkeypatch.setattr(ocr_vision_llm, "select_mode_interactive", lambda: "batch")
+    monkeypatch.setattr(ocr_vision_llm, "select_images_batch", lambda order="name": selected)
+    asked: list[list[str]] = []
+
+    def fake_select(message, choices=None, **kwargs):
+        asked.append(list(choices))
+        return _Answer(answer)
+
+    monkeypatch.setattr(ocr_vision_llm.questionary, "select", fake_select)
+    received: list[list[Path]] = []
+
+    def fake_batch(args, image_paths, **kwargs):
+        received.append(list(image_paths))
+        return 0
+
+    monkeypatch.setattr(ocr_vision_llm, "process_batch", fake_batch)
+    return asked, received
+
+
+def _mismatched(tmp_path):
+    """名前順 1,2,3 / 更新日時順 1,3,2 になる3枚（名前順で返す）"""
+    return _files(
+        tmp_path / "input",
+        ["1.png", "2.png", "3.png"],
+        {"1.png": 1000, "2.png": 3000, "3.png": 2000},
+    )
+
+
+def test_interactive_keep_name_order(tmp_path, monkeypatch, capsys):
+    """食い違いの警告の後、「このまま進む」ならファイル名順で処理する"""
+    selected = _mismatched(tmp_path)
+    asked, received = _patch_interactive(monkeypatch, selected, ocr_vision_llm._CHOICE_KEEP)
+
+    code = ocr_vision_llm.run(_interactive_args(tmp_path))
+
+    assert code == 0
+    assert received == [selected]
+    assert asked == [
+        [
+            ocr_vision_llm._CHOICE_KEEP,
+            ocr_vision_llm._CHOICE_MTIME,
+            ocr_vision_llm._CHOICE_QUIT,
+        ]
+    ]
+    assert "食い違っています（2番目から）" in capsys.readouterr().out
+
+
+def test_interactive_choose_mtime_order(tmp_path, monkeypatch, capsys):
+    """「更新日時の古い順に並べ替えて進む」なら、並べ替え後の一覧を出して更新日時順で処理する"""
+    selected = _mismatched(tmp_path)
+    _, received = _patch_interactive(monkeypatch, selected, ocr_vision_llm._CHOICE_MTIME)
+
+    code = ocr_vision_llm.run(_interactive_args(tmp_path))
+
+    assert code == 0
+    assert [p.name for p in received[0]] == ["1.png", "3.png", "2.png"]
+    out = capsys.readouterr().out
+    assert "並び順: 更新日時の古い順（3枚）" in out
+    assert out.index("並び順: ファイル名順") < out.index("並び順: 更新日時の古い順")
+
+
+@pytest.mark.parametrize("answer", [ocr_vision_llm._CHOICE_QUIT, None])
+def test_interactive_quit_does_nothing(tmp_path, monkeypatch, answer):
+    """「やめる」や Ctrl+C なら OCR は行われず、終了コード 1"""
+    selected = _mismatched(tmp_path)
+    _, received = _patch_interactive(monkeypatch, selected, answer)
+
+    code = ocr_vision_llm.run(_interactive_args(tmp_path))
+
+    assert code == 1
+    assert received == []
+    assert _docs(tmp_path) == []
+
+
+def test_interactive_no_prompt_when_orders_agree(tmp_path, monkeypatch):
+    """食い違いが無ければ選択肢は出さず、そのまま処理する"""
+    selected = _files(
+        tmp_path / "input", ["1.png", "2.png"], {"1.png": 1000, "2.png": 2000}
+    )
+    asked, received = _patch_interactive(monkeypatch, selected, None)
+
+    assert ocr_vision_llm.run(_interactive_args(tmp_path)) == 0
+
+    assert asked == []
+    assert received == [selected]
+
+
+def test_interactive_mtime_order_skips_check(tmp_path, monkeypatch):
+    """更新日時順を指定しているときは、食い違いがあっても選択肢を出さない"""
+    selected = _mismatched(tmp_path)
+    asked, received = _patch_interactive(monkeypatch, selected, None)
+
+    assert ocr_vision_llm.run(_interactive_args(tmp_path, order="mtime")) == 0
+
+    assert asked == []
+    assert received == [selected]  # 並べ替えは select_images_batch 側の責務
+
+
+def test_select_images_batch_returns_in_page_order(tmp_path, monkeypatch):
+    """複数選択は、選んだ順や表示順にかかわらず指定の並べ方で返す"""
+    names = ["10.png", "2.png", "1.png"]
+    _files(tmp_path / "input", names, {"10.png": 1000, "2.png": 2000, "1.png": 3000})
+    monkeypatch.setattr(ocr_vision_llm, "INPUT_DIR", tmp_path / "input")
+    # checkbox は一覧（自然順）と無関係な順で答えを返してくる想定
+    monkeypatch.setattr(
+        ocr_vision_llm.questionary,
+        "checkbox",
+        lambda *a, **k: _Answer(["10.png", "1.png", "2.png"]),
+    )
+
+    by_name = ocr_vision_llm.select_images_batch("name")
+    by_mtime = ocr_vision_llm.select_images_batch("mtime")
+
+    assert [p.name for p in by_name] == ["1.png", "2.png", "10.png"]
+    assert [p.name for p in by_mtime] == ["10.png", "2.png", "1.png"]

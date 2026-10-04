@@ -3,7 +3,7 @@
 戦前日本語OCRツールの作業ログ。会話が長引いて記憶が飛んでも、
 このファイルを読めば「今どこまで出来ていて、次に何をするか」が分かる状態を保つ。
 
-最終更新: 2026-09-22（G8 デッドコード・不要依存の整理 完了）
+最終更新: 2026-10-04（D5 複数画像のページ順 完了）
 
 ---
 
@@ -17,39 +17,42 @@
 
 - 完全ローカル実行（外部送信ゼロ）を達成
 - 統合CLI `prewar` に全機能を集約（引数なしで対話メニュー。起動コマンドは `prewar` だけ）
-- テスト: 本体308件 + senzen_word 73件 = **381件**（`uv run pytest tests/ pkg/`）
+- テスト: 本体378件 + senzen_word 73件 = **451件**（`uv run pytest tests/ pkg/`）
 
 G系（コード品質・堅牢性）の「静かに壊れる」バグと索引の正確性を潰し、検索の使い勝手（C系）も上げた。
 OCRパイプラインの経路を1本化してテストの安全網を張り、不要依存と古い記述も掃除したので、以降の大きな改修（F1 等）に入れる土台が整った。
 
 ---
 
-## 2. 直近の作業（2026-09-22）: G8 デッドコード・不要依存の整理
+## 2. 直近の作業（2026-10-04）: D5 複数画像のページ順
 
-**問題**: 使っていない依存・効かない設定・読まれないコード・古い記述が残り、混乱の元になっていた。
-特に `surya-ocr` は `prewar check` で「import できるか」を見るだけなのに、torch 等を引き込んで
-`.venv` の7割超を占めていた。`chunk.overlap` は設定しても分割処理に一切効いていなかった。
+**問題**: フォルダ指定・対話メニューの複数選択が、ファイル名を**文字列として**並べてから1文書に結合していた。
+`1.png, 2.png, …, 10.png` は `1, 10, 11, …, 2` の順になり、**ページが入れ替わったまま口語体に変換**される
+（エラーは出ない）。実物の `input/1.png`〜`32.png` では32枚中31枚の位置がずれ、旧形式の出力名も `1-9_modern.txt` になった。
 
-**やったこと**（設計と詳細は `openspec/changes/archive/2026-09-22-g8-dead-code-cleanup/`、事前調査は `survey/g8-dead-code-survey.md`）
+**やったこと**（設計と詳細は `openspec/changes/archive/2026-10-04-d5-page-order-sort/`、事前調査は `survey/d5-page-order-survey.md`）
 
 | 対応 | 実装場所 |
 |---|---|
-| `requests`・`pillow` を削除、`surya-ocr` を extra `surya` へ（`uv sync --extra surya` で導入） | `pyproject.toml`, `uv.lock` |
-| `prewar check` は必須4項目だけで合否判定。Surya 未導入は「未導入（任意）」表示で不合格にしない。確認対象を実使用の8パッケージに | `scripts/setup_check.py` |
-| 旧コマンド `prewar-ocr` / `prewar-library` を廃止。検索構文ヘルプを `prewar search --help` へ移設 | `pyproject.toml`, `scripts/cli.py`, `scripts/library.py` |
-| `chunk.overlap`・`OCRResult.raw_response`・`is_available()`・`ModernizeResult.ok`・ルートの `main.py` を削除 | `utils/`, `config.toml` |
-| テスト追加（環境確認の合否・起動コマンドが `prewar` だけ・検索ヘルプの内容） | `tests/test_setup_check.py`, `tests/test_cli.py` |
-| 文書の食い違いを修正（senzen_word の字数 318→384・パターン数 109→92・変換例、未記載の `diff`/`clean` など） | `README.md`, `CLAUDE.md`, `pkg/senzen_word/README.md` ほか |
+| 自然順のキー（数字部分を数値で比較。stem を NFKC＋casefold、同値は桁数→拡張子→元の名前で決める。外部依存なし） | `utils/page_order.py` |
+| 画像の列挙を1関数に統一。`.tif` / `.webp` の取りこぼし・隠しファイル（`._1.png`）・画像名のフォルダを修正。拡張子の正は `ollama_client.SUPPORTED_EXTENSIONS` | `utils/page_order.py`, `scripts/ocr_vision_llm.py`, `scripts/clean.py` |
+| 結合前に並び順を番号付きで表示。ファイル名順と更新日時順が食い違えば警告（フォルダ指定は表示のみで続行、対話は「このまま進む／更新日時順にする／やめる」） | `scripts/ocr_vision_llm.py` |
+| `--order name\|mtime` と `[batch] order`（既定 `name`）。設定値が不正ならエラーで OCR 前に止める | `scripts/ocr_vision_llm.py`, `utils/config.py`, `config.toml` |
+| 撮りためを「撮った順のまま」処理に渡す（1000枚目から崩れる `sorted()` を除去） | `utils/screen_capture.py`, `scripts/ocr_vision_llm.py` |
+| テスト追加（自然順・列挙・食い違い検知・対話の3択・撮りため・前処理が全形式を読めること）。`対象:` 行のテストを更新 | `tests/test_page_order.py` ほか |
 
 **設計上の判断**
 
-- `chunk.overlap` は実装せず削除。文の境界で切る分割なので、重ねると同じ文が二度口語化されて出力が重複する
-- Surya は削除せず任意依存に。A2（複数エンジン比較）の候補として残す。確認は `find_spec` で有無だけ見る（torch を読まないので速い）
-- 依存の変更は `uv remove` ではなく `pyproject.toml` の直接編集＋`uv lock` で行った。`uv remove` → `uv add` だと
-  surya の推移依存（torch 2.10→2.14 など）まで解き直されるため
+- 自然順は自作（15行）。`natsort` は最新が2023年で対応表記が Python 3.11 まで、G8 で依存を減らした直後でもあるため
+- 食い違いの警告は**ファイル名順のときだけ**、`--separate` と `shoot` では出さない。更新日時順を選んだ人に毎回警告しても雑音になるため
+- 更新日時（`st_mtime_ns`）は「既定の並べ順」にはしない。`cp` でコピーすると変わるので、名前が当てにならないときの逃げ道と、食い違いの検知にだけ使う
+- 自然順で直らない形式（英語 AM/PM のスクショ名・漢数字・`IMG_9999` の巻き戻り）は個別対応せず、警告と `--order mtime` で受ける
 
-**利用者から見える変化**: `uv run prewar-ocr` / `uv run prewar-library` は使えない（README に置き換え表）。
-`.venv` が **700MB → 152MB**。OCR・正規化・口語化・保存・検索の出力は不変。
+**利用者から見える変化**: 0埋めのない名前は番号順に並ぶ（0埋めの `pNNN` は従来どおり）。`.tif` / `.webp` がフォルダ処理に入る。
+処理前に `並び順: …` の一覧が出る。`対象: a.png, b.png, …` の1行表示は番号付き一覧に置き換わった。
+
+**未対応（スコープ外）**: 並び順の手動入れ替え、meta.json への元ファイル名の記録（保存後はページ順を検証できない）、
+対応外の形式（`.heic` / `.jp2` 等）が混ざったときの通知
 
 ---
 
@@ -70,6 +73,7 @@ OCRパイプラインの経路を1本化してテストの安全網を張り、�
 | 2026-08-31 | **C2/C3**（OR/NOT/対象限定の検索構文・抜粋の可変長と色分離・一致箇所数） | `openspec/changes/archive/2026-08-31-search-query-expression/` |
 | 2026-09-22 | **G7/E1**（1枚/複数枚のOCR経路を1本化・パイプラインとCLIのテスト66件） | `openspec/changes/archive/2026-09-22-unify-ocr-pipeline/` |
 | 2026-09-22 | **G8**（不要依存・旧コマンド・効かない設定の削除、文書の食い違い修正。`.venv` 700MB→152MB） | 上記セクション2 |
+| 2026-10-04 | **D5**（複数画像のページ順を自然順に。並び順の表示・食い違い警告・`--order`・`.tif`/`.webp` の取りこぼし修正） | `openspec/changes/archive/2026-10-04-d5-page-order-sort/` |
 
 ---
 
@@ -78,6 +82,7 @@ OCRパイプラインの経路を1本化してテストの安全網を張り、�
 `plan/improvement-ideas.md` の優先順位に従う。
 
 1. **D3 処理ログのファイル保存**（全部 print で揮発している） ← 次の候補
+   （口語化の質では、D5 でページ順が正しくなったので **B3 ページ境界の連結 ＋ G11 失敗ページの目印** を1つの変更にまとめるのが効率的）
 2. G9 口語化チャンクのフェイルファスト（G4で顕在化。無応答が続くと 300秒×チャンク数 待つ）
 3. G10 旧字体変換表の穴（「內」→「内」等）を機械生成で塞ぐ
 4. OCR出力の反復検知（下の保留メモ。G7の実機確認でも再現し、口語化の所要時間を大きく押し上げている。

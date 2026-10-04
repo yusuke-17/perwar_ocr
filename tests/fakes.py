@@ -9,6 +9,8 @@ tests/ には __init__.py が無く、pytest の既定動作で tests/ が impor
 `from fakes import FakeClient` で読み込める。
 """
 
+from pathlib import Path
+
 from utils.ollama_client import OCRResult
 from utils.text_modernizer import ModernizeResult
 
@@ -43,6 +45,29 @@ class FakeClient:
             text = f"ページ{self.calls}の本文"
         return OCRResult(
             text=text,
+            model=self.model,
+            image_path=str(image_path),
+            elapsed_seconds=0.1,
+            prompt="テスト用",
+        )
+
+
+class NameEchoClient:
+    """画像のファイル名をそのまま本文にして返すOCRクライアント
+
+    FakeClient の本文は「呼ばれた順」の番号なので、結合後の本文がどの画像の順かを
+    見分けられない。こちらは画像名が本文に入るため、ページ順の検証に使う。
+    """
+
+    model = "fake-ocr"
+
+    def __init__(self):
+        self.calls = 0
+
+    def ocr(self, image_path):
+        self.calls += 1
+        return OCRResult(
+            text=f"本文:{Path(image_path).name}",
             model=self.model,
             image_path=str(image_path),
             elapsed_seconds=0.1,

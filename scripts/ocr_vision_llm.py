@@ -32,7 +32,7 @@ from pathlib import Path
 
 import questionary
 
-from utils.config import CONFIG
+from utils.config import CONFIG, ConfigError
 from utils.image_preprocessor import (
     PreprocessError,
     options_from_config,
@@ -55,6 +55,13 @@ from utils.ollama_client import (
     OllamaModelNotFoundError,
     OllamaOCRClient,
     OllamaTimeoutError,
+)
+from utils.page_order import (
+    ORDER_CHOICES,
+    OrderMismatch,
+    first_mismatch,
+    list_images,
+    sort_pages,
 )
 from utils.progress import spinner
 from utils.text_normalizer import normalize_text
@@ -144,6 +151,16 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="フォルダ/セッションを画像ごとの別記録として処理（既定は結合して1記録）",
     )
     parser.add_argument(
+        "--order",
+        choices=list(ORDER_CHOICES),
+        default=None,
+        help=(
+            "複数枚を結合するときのページ順。"
+            "name=ファイル名の自然順（既定）、mtime=更新日時の古い順。"
+            "撮りためで撮った画像は常に撮った順"
+        ),
+    )
+    parser.add_argument(
         "--on-page-error",
         choices=["skip", "abort"],
         default=None,
@@ -154,7 +171,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
 INPUT_DIR = Path(CONFIG.get("paths.input"))
 
 
@@ -164,9 +180,7 @@ def select_image_interactive() -> Path | None:
         print(f"✗ {INPUT_DIR}/ ディレクトリが見つかりません")
         return None
 
-    images = sorted(
-        [f for f in INPUT_DIR.iterdir() if f.suffix.lower() in IMAGE_EXTENSIONS]
-    )
+    images = list_images(INPUT_DIR)
 
     if not images:
         print(f"✗ {INPUT_DIR}/ に画像ファイルがありません")
@@ -201,15 +215,17 @@ def select_mode_interactive() -> str | None:
     return "single" if mode == "1枚の画像を処理" else "batch"
 
 
-def select_images_batch() -> list[Path] | None:
-    """input/ディレクトリから複数画像を対話的に選択する"""
+def select_images_batch(order: str = "name") -> list[Path] | None:
+    """input/ディレクトリから複数画像を対話的に選択する
+
+    返す順序は指定の並べ方（order）に従う。questionary.checkbox は
+    チェックした順ではなく一覧の表示順で返すため、選択順は使えない。
+    """
     if not INPUT_DIR.exists():
         print(f"✗ {INPUT_DIR}/ ディレクトリが見つかりません")
         return None
 
-    images = sorted(
-        [f for f in INPUT_DIR.iterdir() if f.suffix.lower() in IMAGE_EXTENSIONS]
-    )
+    images = list_images(INPUT_DIR)
 
     if not images:
         print(f"✗ {INPUT_DIR}/ に画像ファイルがありません")
@@ -225,8 +241,7 @@ def select_images_batch() -> list[Path] | None:
     if selected is None:
         return None
 
-    # ファイル名順にソート（選択順ではなく番号順を保証）
-    return sorted([INPUT_DIR / name for name in selected])
+    return sort_pages([INPUT_DIR / name for name in selected], order)
 
 
 def _save_legacy(text: str, image_paths: list[Path], output_dir: Path) -> Path:
@@ -535,6 +550,87 @@ def _batch_policy(args: argparse.Namespace) -> tuple[str, int]:
     return on_page_error, abort_after
 
 
+def _resolve_order(args: argparse.Namespace) -> str:
+    """ページ順の並べ方を返す
+
+    CLI フラグ（--order）> config.toml（batch.order）> 既定値（name）の優先順。
+    ページ順は結果を左右するので、設定ファイルの値が未知のときは
+    黙って既定値に戻さず ConfigError にする（--order の未知の値は argparse が弾く）。
+    """
+    order = getattr(args, "order", None) or CONFIG.get("batch.order", "name")
+    if order not in ORDER_CHOICES:
+        raise ConfigError(
+            f"config.toml の batch.order が不正です: {order!r}"
+            f"（使えるのは: {', '.join(ORDER_CHOICES)}）"
+        )
+    return order
+
+
+# 並べ方の表示名（番号付き一覧の見出しに使う）
+_ORDER_LABELS = {"name": "ファイル名順", "mtime": "更新日時の古い順"}
+_SHOOT_ORDER_LABEL = "撮影順"
+
+# 対話での食い違い時の選択肢
+_CHOICE_KEEP = "このまま進む（ファイル名順）"
+_CHOICE_MTIME = "更新日時の古い順に並べ替えて進む"
+_CHOICE_QUIT = "やめる"
+
+
+def _print_page_list(image_paths: list[Path], label: str) -> None:
+    """結合する画像を処理する順の番号付き一覧で表示する（2枚以上のときだけ）
+
+    取り違えに気づけるよう、OCR を始める前に並び順を見せる。
+    """
+    if len(image_paths) < 2:
+        return
+    print(f"\n並び順: {label}（{len(image_paths)}枚）")
+    width = len(str(len(image_paths)))
+    for i, path in enumerate(image_paths, start=1):
+        print(f"  {i:>{width}}. {path.name}")
+
+
+def _print_mismatch_warning(mismatch: OrderMismatch) -> None:
+    """ファイル名順と更新日時順の食い違いを警告する（全件は並べず最初の位置だけ示す）"""
+    print(
+        f"\n⚠ ファイル名順と更新日時の順が食い違っています"
+        f"（{mismatch.position}番目から）"
+    )
+    print(f"    ファイル名順の{mismatch.position}番目: {mismatch.by_name.name}")
+    print(f"    更新日時順の{mismatch.position}番目: {mismatch.by_mtime.name}")
+    print("  コピーなどで日時が変わっているなら、ファイル名順のままで正しい読み順です。")
+    print("  更新日時の順で読みたいときは --order mtime を付けて実行してください。")
+
+
+def _confirm_batch_order(image_paths: list[Path], order: str) -> list[Path] | None:
+    """対話メニューの複数選択で、並び順を見せ、食い違いがあれば進め方を選ばせる
+
+    返り値: 処理する順の画像リスト。「やめる」・Ctrl+C のときは None。
+    食い違いの検知はファイル名順のときだけ（更新日時順を選んだ人に毎回警告しない）。
+    """
+    _print_page_list(image_paths, _ORDER_LABELS[order])
+    if order != "name" or len(image_paths) < 2:
+        return image_paths
+
+    mismatch = first_mismatch(image_paths)
+    if mismatch is None:
+        return image_paths
+
+    _print_mismatch_warning(mismatch)
+    choice = questionary.select(
+        "どのように進めますか？",
+        choices=[_CHOICE_KEEP, _CHOICE_MTIME, _CHOICE_QUIT],
+    ).ask()
+
+    if choice is None or choice == _CHOICE_QUIT:
+        print("中止しました。")
+        return None
+    if choice == _CHOICE_MTIME:
+        reordered = sort_pages(image_paths, "mtime")
+        _print_page_list(reordered, _ORDER_LABELS["mtime"])
+        return reordered
+    return image_paths
+
+
 def _print_block(title: str, text: str) -> None:
     """見出し付きで本文を表示する（OCR結果・正規化結果・変換結果で共通）"""
     print()
@@ -673,9 +769,7 @@ def process_batch(
     """
     total = len(image_paths)
     if total > 1:
-        names = ", ".join(p.name for p in image_paths)
         print(f"\n処理モード: 複数画像（{total}枚）")
-        print(f"対象: {names}")
 
     # 前処理後画像は一時ディレクトリに置き、OCR入力に使う。
     # 保存時は save_document が temp 削除前に library へ実体コピーする。
@@ -737,15 +831,13 @@ def process_batch(
         return _exit_code(outcome, modern_meta)
 
 
-def load_folder_images(folder: Path) -> list[Path] | None:
-    """フォルダ内の画像をファイル名順（＝ページ順）に並べて返す
+def load_folder_images(folder: Path, order: str = "name") -> list[Path] | None:
+    """フォルダ内の画像をページ順に並べて返す
 
-    pNNN（ゼロ埋め）連番なら sorted() で読む順が保たれる。
+    order は並べ方（name=ファイル名の自然順 / mtime=更新日時の古い順）。
     画像が1枚もなければ警告して None を返す。
     """
-    images = sorted(
-        [f for f in folder.iterdir() if f.suffix.lower() in IMAGE_EXTENSIONS]
-    )
+    images = sort_pages(list_images(folder), order)
     if not images:
         print(f"✗ {folder}/ に画像ファイルがありません")
         return None
@@ -756,6 +848,7 @@ def process_folder(
     args: argparse.Namespace,
     folder: Path,
     *,
+    images: list[Path] | None = None,
     client: OllamaOCRClient | None = None,
     modernizer: TextModernizer | None = None,
 ) -> int:
@@ -764,12 +857,30 @@ def process_folder(
     既定は結合して1記録（process_batch）。--separate 指定時は
     画像ごとに別記録（process_single）として処理する。
 
+    images を渡すと、フォルダを列挙し直さずその順のまま処理する
+    （撮りため直後用。撮った順が正で、並べ替えも食い違いの警告もしない）。
+    渡さなければ --order / config.toml の並べ方で並べる。
+    結合するときは並び順を番号付きで表示し、ファイル名順で更新日時順と食い違えば
+    警告する（表示だけで、処理は止めず終了コードにも反映しない）。
+
     --separate では1枚失敗しても残りの画像を処理し続ける（G2）。
     終了コード: 0=全件成功 / 2=一部失敗 / 1=全件失敗
     """
-    images = load_folder_images(folder)
     if images is None:
-        return 1
+        order = _resolve_order(args)
+        images = load_folder_images(folder, order)
+        if images is None:
+            return 1
+        label, check_mismatch = _ORDER_LABELS[order], order == "name"
+    else:
+        label, check_mismatch = _SHOOT_ORDER_LABEL, False
+
+    if not args.separate:
+        _print_page_list(images, label)
+        if check_mismatch and len(images) > 1:
+            mismatch = first_mismatch(images)
+            if mismatch is not None:
+                _print_mismatch_warning(mismatch)
 
     if args.separate:
         print(f"\n処理モード: 画像ごとに別記録（{len(images)}件）")
@@ -833,11 +944,18 @@ def cmd_shoot(args: argparse.Namespace) -> int:
         print(f"  uv run prewar ocr {session_dir}/")
         return 0
 
-    return process_folder(args, session_dir)
+    return process_folder(args, session_dir, images=images)
 
 
 def run(args: argparse.Namespace) -> int:
     """パース済み引数を受け取り、OCR処理を実行する"""
+    # ページ順の設定が不正なら、OCR を始める前に止める（撮影やモデル呼び出しの後では遅い）
+    try:
+        _resolve_order(args)
+    except ConfigError as e:
+        print(f"✗ {e}")
+        return 1
+
     # 'shoot' → 範囲スクショ撮りためモード
     if args.image == "shoot":
         return cmd_shoot(args)
@@ -860,7 +978,11 @@ def run(args: argparse.Namespace) -> int:
             return 1
         return process_single(args, selected)
     else:
-        selected = select_images_batch()
+        order = _resolve_order(args)
+        selected = select_images_batch(order)
+        if selected is None:
+            return 1
+        selected = _confirm_batch_order(selected, order)
         if selected is None:
             return 1
         return process_batch(args, selected)

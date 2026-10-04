@@ -27,9 +27,7 @@ import questionary
 
 from utils.config import CONFIG
 from utils.library_search import LibraryIndex
-
-# OCR対象画像の拡張子（ocr_vision_llm と揃える）
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
+from utils.ollama_client import SUPPORTED_EXTENSIONS
 
 
 # ---------- CLI 引数 ----------
@@ -135,7 +133,7 @@ def _clean_input(args: argparse.Namespace) -> int:
         child
         for child in input_dir.iterdir()
         if not child.name.startswith(".")
-        and (child.is_dir() or child.suffix.lower() in IMAGE_EXTENSIONS)
+        and (child.is_dir() or child.suffix.lower() in SUPPORTED_EXTENSIONS)
     )
     if not entries:
         print(f"{input_dir}/ に削除対象はありません。")

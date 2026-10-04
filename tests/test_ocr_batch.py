@@ -11,6 +11,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from scripts.ocr_vision_llm import _ocr_pages, _preprocess_images, _run_modernize
 from utils.text_modernizer import ChunkFailure, ModernizeResult
@@ -282,6 +283,28 @@ def test_preprocess_falls_back_per_page(tmp_path):
     assert len(paths) == 3  # 元画像と同順・同数（添字の対応が崩れない）
     assert paths[1] == broken  # 失敗ページだけ元画像にフォールバック
     assert paths[0].parent == workdir and paths[2].parent == workdir
+
+
+@pytest.mark.parametrize("suffix", [".tif", ".tiff", ".webp", ".jpg", ".bmp"])
+def test_preprocess_reads_every_format_the_folder_scan_accepts(tmp_path, suffix):
+    """フォルダ処理が対象にする形式（.tif / .webp を含む）は、前処理で読めて元画像に頼らない
+
+    列挙側を OCR が対応する形式にそろえたので、前処理（OpenCV）が読めない形式が
+    混ざると全ページ「元画像にフォールバック」になって前処理が静かに効かなくなる。
+    """
+    src = tmp_path / f"page{suffix}"
+    img = np.full((120, 200, 3), 255, dtype=np.uint8)
+    cv2.rectangle(img, (20, 40), (180, 60), (0, 0, 0), -1)
+    ok, buf = cv2.imencode(suffix, img)
+    assert ok
+    buf.tofile(str(src))
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    paths, meta = _preprocess_images(_preprocess_args(), [src], workdir)
+
+    assert paths is not None and meta is not None
+    assert paths[0] != src and paths[0].parent == workdir  # フォールバックしていない
 
 
 def test_preprocess_all_failed_disables_preprocess(tmp_path):
