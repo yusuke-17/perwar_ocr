@@ -92,3 +92,61 @@ def test_check_surya_not_installed(monkeypatch, capsys):
 
     assert setup_check.check_surya() is False
     assert "uv sync --extra surya" in capsys.readouterr().out
+
+
+# ---------- Ollama のバージョン表示（G12） ----------
+
+
+class _FakeListClient:
+    """list() にモデル名を返し、_request_raw（/api/version）は指定どおりに振る舞う"""
+
+    def __init__(self, version: str | None = "0.40.2"):
+        self.version = version
+
+    def list(self):
+        class _Entry:
+            model = "glm-ocr:latest"
+
+        class _Models:
+            models = [_Entry()]
+
+        return _Models()
+
+    def _request_raw(self, method, url):
+        if self.version is None:
+            raise RuntimeError("404 page not found")
+
+        version = self.version
+
+        class _Response:
+            def json(self):
+                return {"version": version}
+
+        return _Response()
+
+
+def test_ollama_version_is_shown(monkeypatch, capsys):
+    """仕様「Ollama に接続できる」: 接続確認とともにバージョンが出る"""
+    from utils import ollama_client
+
+    monkeypatch.setattr(ollama_client, "list_client", lambda: _FakeListClient())
+
+    ok, names = setup_check.check_ollama_connection()
+
+    assert ok is True
+    assert names == ["glm-ocr:latest"]
+    assert "バージョン: 0.40.2" in capsys.readouterr().out
+
+
+def test_unknown_version_does_not_fail(monkeypatch, capsys):
+    """仕様「バージョンが取得できない」: 「不明」と出て、接続確認は合格のまま"""
+    from utils import ollama_client
+
+    monkeypatch.setattr(
+        ollama_client, "list_client", lambda: _FakeListClient(version=None)
+    )
+
+    ok, _ = setup_check.check_ollama_connection()
+
+    assert ok is True
+    assert "バージョン: 不明" in capsys.readouterr().out

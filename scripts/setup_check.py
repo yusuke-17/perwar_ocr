@@ -4,7 +4,7 @@
 確認項目:
   1. Python バージョン
   2. 依存パッケージのインポート
-  3. Ollama サーバーへの接続
+  3. Ollama サーバーへの接続（バージョンも表示）
   4. GLM-OCR モデルの存在確認 & 簡易テスト
   5. Surya OCR の導入有無（任意。未導入でも不合格にしない）
 
@@ -62,6 +62,7 @@ def check_ollama_connection():
             models = list_client().list()
         model_names = [m.model for m in models.models]
         print(f"  ✓ Ollama 接続OK（{len(model_names)} モデル検出）")
+        print(f"    バージョン: {_ollama_version_or_unknown()}")
         for name in model_names:
             print(f"    - {name}")
         return True, model_names
@@ -69,6 +70,19 @@ def check_ollama_connection():
         print(f"  ✗ Ollama に接続できません: {e}")
         print("  → Ollama.app を起動してください（メニューバーにアイコンが出ます）")
         return False, []
+
+
+def _ollama_version_or_unknown() -> str:
+    """Ollama のバージョン。取れなければ「不明」（合否には影響させない）
+
+    Ollama.app は自動更新されるため、OCR の挙動が変わったときの切り分けに表示する（G12）。
+    """
+    from utils.ollama_client import ollama_version
+
+    try:
+        return ollama_version()
+    except Exception:
+        return "不明"
 
 
 def check_glm_ocr(model_names: list[str]):

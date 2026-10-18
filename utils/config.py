@@ -49,9 +49,18 @@ _DEFAULTS: dict[str, Any] = {
     "llm": {"temperature": 0.5, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.1},
     # OCR(chat)の生成パラメータ。llm と対称で、セクション丸ごと options= に渡る。
     # → ここには「Ollama の options として意味のあるキー」以外を足さないこと。
+    #   例外は retry_on_repeat だけで、ollama_client.ocr_options() が取り除いてから渡す。
     "ocr": {
         "temperature": 0.0,  # 読み取りに創造性は不要。同じ画像なら同じ結果に寄せる
         "seed": 0,           # 残るサンプリングの揺らぎも固定して再現性を確保する
+        # 1ページの生成トークン数の上限（G12）。glm-ocr は縦書き資料で同じ行を
+        # 繰り返し続けるため、上限が無いと num_ctx いっぱいまで生成して1枚55秒かかる。
+        # 実測の最長ページ（約410字≒450トークン）の2倍以上。0 以下で無制限（渡さない）。
+        "num_predict": 1024,
+        # 反復検知（HTTP 500 token repeat limit）で打ち切られたときの再試行回数（G12）。
+        # 生成パラメータではない。シードを変えて再試行するが、temperature=0 では
+        # シードが出力に影響しないため既定は 0（再試行しない）。実測は survey/batch-slow-failure-survey.md
+        "retry_on_repeat": 0,
     },
     "search": {
         "limit": 20,

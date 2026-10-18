@@ -564,6 +564,38 @@ def test_build_record_keeps_only_successful_pages(tmp_path):
     assert record.pages_aborted is True
 
 
+def test_build_record_collects_trim_and_limit_by_original_page(tmp_path):
+    """G12: 切り落とし字数と上限到達を、失敗ページを飛ばした元のページ番号で集める"""
+    images = [Path(f"p{i:03d}.png") for i in (1, 2, 3, 4)]
+    failure = MetaPageFailure(index=2, source="p002.png", reason="repeat", message="反復")
+    results = [_ocr_result("一", 1.0), _ocr_result("三", 1.0), _ocr_result("四", 1.0)]
+    results[1].trimmed_chars = 1200  # 3枚目（成功分の2件目）
+    results[1].hit_limit = True
+    results[2].hit_limit = True  # 4枚目: 反復なしで上限到達＝本当に長いページ
+    outcome = _outcome(results, [0, 2, 3], [failure])
+
+    record = _build_record(
+        _args(tmp_path), images, outcome, "一\n\n三\n\n四", "現代語",
+        MetaModernize(True, "m"), None, None,
+    )
+
+    assert record.ocr_meta.repetition_trimmed == {3: 1200}
+    assert record.ocr_meta.hit_limit_pages == [3, 4]
+
+
+def test_build_record_has_no_trim_info_when_clean(tmp_path):
+    """反復も上限到達も無ければ空のまま（meta.json にキーが出ない）"""
+    outcome = _outcome([_ocr_result("一", 1.0)], [0])
+
+    record = _build_record(
+        _args(tmp_path), [Path("p001.png")], outcome, "一", "一",
+        MetaModernize(True, "m"), None, None,
+    )
+
+    assert record.ocr_meta.repetition_trimmed == {}
+    assert record.ocr_meta.hit_limit_pages == []
+
+
 @pytest.mark.parametrize("no_normalize", [False, True])
 def test_build_record_normalization_flags(tmp_path, no_normalize):
     """正規化の4項目は --no-normalize の有無でそろって切り替わる"""

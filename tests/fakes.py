@@ -20,6 +20,8 @@ class FakeClient:
 
     fail_at: {1始まりのページ番号: 投げる例外} を渡す。
     texts: ページごとに返す本文。省略時は「ページNの本文」を返す。
+    extras: {1始まりのページ番号: OCRResult に足す属性}（例: {"trimmed_chars": 120}）。
+            反復の切り落とし・上限到達・再試行が起きたページを再現するために使う。
     calls に実際に呼ばれた回数が残るので、打ち切りの検証にも使える。
     """
 
@@ -29,9 +31,11 @@ class FakeClient:
         self,
         fail_at: dict[int, BaseException] | None = None,
         texts: list[str] | None = None,
+        extras: dict[int, dict] | None = None,
     ):
         self.fail_at = fail_at or {}
         self.texts = texts
+        self.extras = extras or {}
         self.calls = 0
 
     def ocr(self, image_path):
@@ -49,6 +53,7 @@ class FakeClient:
             image_path=str(image_path),
             elapsed_seconds=0.1,
             prompt="テスト用",
+            **self.extras.get(self.calls, {}),
         )
 
 

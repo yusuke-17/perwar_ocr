@@ -54,6 +54,7 @@ from utils.ollama_client import (
     OllamaConnectionError,
     OllamaModelNotFoundError,
     OllamaOCRClient,
+    OllamaRepeatError,
     OllamaTimeoutError,
 )
 from utils.page_order import (
@@ -280,7 +281,11 @@ _OCR_ERROR_KINDS: list[tuple[type[Exception], str, str]] = [
     (OllamaConnectionError, "connection", "Ollama接続エラー"),
     (OllamaTimeoutError, "timeout", "Ollamaタイムアウト"),
     (OllamaModelNotFoundError, "model", "モデルエラー"),
+    (OllamaRepeatError, "repeat", "反復による打ち切り"),
 ]
+
+# 連続失敗の打ち切りに数えない理由コード。Ollama 停止と違い、次のページは成功しうるため
+_NOT_COUNTED_AS_CONSECUTIVE = {"repeat"}
 
 
 def _classify_ocr_error(error: Exception) -> tuple[str, str]:
@@ -324,7 +329,34 @@ def _run_ocr_page(
         )
 
     print(f"  完了（{result.elapsed_seconds:.2f}秒）")
+    _warn_ocr_quality(result, source)
     return result
+
+
+def _warn_ocr_quality(result: OCRResult, source: Path) -> None:
+    """再試行・反復の切り落とし・生成上限への到達を警告として表示する（G12）
+
+    どれも成功ページの扱いは変えない。「静かに壊れない」ための表示で、
+    反復の警告なしで上限の警告だけ出たら、そのページは本当に長いと判断できる。
+    """
+    if result.attempts > 1:
+        print(
+            f"  ⚠ 反復検知で打ち切られたため、シードを変えて再試行しました"
+            f"（{result.attempts}回目で成功）"
+        )
+    if result.trimmed_chars:
+        print(
+            f"  ⚠ 反復を検知し、{source.name} の末尾 {result.trimmed_chars} 字を"
+            f"切り落としました（残した本文は ocr_raw.txt で確認できます）"
+        )
+    if result.hit_limit:
+        limit = result.options.get("num_predict")
+        limit_text = f"（{limit} トークン）" if limit else ""
+        print(
+            f"  ⚠ {source.name} は生成上限{limit_text}に達しました。後半が欠けている可能性があります\n"
+            f"    → 反復の警告が出ていなければ本当に長いページです。"
+            f"config.toml の [ocr] num_predict を増やすと改善することがあります"
+        )
 
 
 def _preprocess_images(
@@ -442,7 +474,9 @@ def _ocr_pages(
             continue
 
         outcome.failures.append(page)
-        consecutive += 1
+        # 反復による失敗は数えない（リセットもしない。反復→接続不可×3 は従来どおり打ち切る）
+        if page.reason not in _NOT_COUNTED_AS_CONSECUTIVE:
+            consecutive += 1
 
         # 従来挙動（abort）と、Ollama停止などで全ページ失敗が確定的な場合の打ち切り
         if on_page_error == "abort" or (abort_after and consecutive >= abort_after):
@@ -681,6 +715,10 @@ def _build_record(
     ok_pre_paths = [pre_paths[i] for i in outcome.ok_indices] if pre_paths else None
     first = outcome.results[0]
     normalized = not args.no_normalize
+    # 反復の切り落とし・上限到達は、元の並びでの1始まりページ番号で記録する
+    pairs = list(zip(outcome.ok_indices, outcome.results))
+    repetition_trimmed = {i + 1: r.trimmed_chars for i, r in pairs if r.trimmed_chars}
+    hit_limit_pages = [i + 1 for i, r in pairs if r.hit_limit]
 
     return DocumentRecord(
         source_paths=ok_sources,
@@ -691,6 +729,8 @@ def _build_record(
             prompt=first.prompt,
             elapsed_seconds=sum(r.elapsed_seconds for r in outcome.results),
             options=first.options,
+            repetition_trimmed=repetition_trimmed,
+            hit_limit_pages=hit_limit_pages,
         ),
         normalization=MetaNormalization(
             old_kanji=normalized,

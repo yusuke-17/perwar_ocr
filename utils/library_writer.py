@@ -52,6 +52,11 @@ class MetaOcr:
     # 実際にOllamaへ渡した生成パラメータ（config.toml の [ocr]）。
     # 「この記録がどの設定で作られたか」を後から追えるようにするため。
     options: dict = field(default_factory=dict)
+    # 反復として切り落とした字数 {1始まりのページ番号: 字数}（G12）。
+    # 切り落とした本文は保存しないので、「消したこと」をここで追えるようにする
+    repetition_trimmed: dict[int, int] = field(default_factory=dict)
+    # 生成上限（num_predict）に達して終わったページ番号（1始まり）
+    hit_limit_pages: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -97,7 +102,8 @@ class MetaPageFailure:
 
     index: int  # 元の並びでの1始まりページ番号
     source: str  # 元画像のファイル名
-    # "image" | "connection" | "timeout" | "model" | "unknown" | "interrupted"
+    # "image" | "connection" | "timeout" | "model" | "repeat" | "unknown" | "interrupted"
+    # （repeat は OCR エンジンの反復検知で打ち切られ、再試行しても失敗したもの）
     reason: str
     message: str
 
@@ -253,6 +259,16 @@ def save_document(
         "tags": list(record.tags),
         "note": record.note,
     }
+
+    # 反復の切り落とし・生成上限への到達があった場合のみ残す（G12）。
+    # JSON のキーは文字列なので、ページ番号は文字列にする
+    if record.ocr_meta.repetition_trimmed:
+        meta["ocr"]["repetition_trimmed"] = {
+            str(index): chars
+            for index, chars in sorted(record.ocr_meta.repetition_trimmed.items())
+        }
+    if record.ocr_meta.hit_limit_pages:
+        meta["ocr"]["hit_limit_pages"] = sorted(record.ocr_meta.hit_limit_pages)
 
     # 口語体変換が部分的にしか成功しなかった場合のみ、その事実を残す（G2b）
     if record.modernize.error:

@@ -13,7 +13,12 @@ import cv2
 import numpy as np
 import pytest
 
-from scripts.ocr_vision_llm import _ocr_pages, _preprocess_images, _run_modernize
+from scripts.ocr_vision_llm import (
+    _ocr_pages,
+    _preprocess_images,
+    _run_modernize,
+    _run_ocr_page,
+)
 from utils.text_modernizer import ChunkFailure, ModernizeResult
 from utils.library_writer import (
     DocumentRecord,
@@ -26,6 +31,7 @@ from utils.library_writer import (
 from utils.ollama_client import (
     ImageFileError,
     OllamaConnectionError,
+    OllamaRepeatError,
     OllamaTimeoutError,
 )
 
@@ -155,6 +161,48 @@ def test_consecutive_counter_resets_on_success():
     assert outcome.aborted is False
     assert client.calls == 6
     assert outcome.ok_indices == [2, 4, 5]
+
+
+def test_repeat_failure_is_recorded_as_repeat():
+    """仕様「反復による失敗がメタ情報に残る」: 理由 repeat で記録され、残りは処理される"""
+    images = _pages(3)
+    client = _FakeClient({2: OllamaRepeatError("反復検知で打ち切り")})
+
+    outcome = _ocr_pages(client, images, images)
+
+    assert outcome.failures[0].index == 2
+    assert outcome.failures[0].reason == "repeat"
+    assert outcome.ok_indices == [0, 2]
+
+
+def test_repeat_failures_do_not_abort():
+    """仕様「反復による失敗は打ち切りに数えない」: 1〜3枚目が反復でも 4 枚目以降を処理する"""
+    images = _pages(10)
+    client = _FakeClient({i: OllamaRepeatError("反復") for i in (1, 2, 3)})
+
+    outcome = _ocr_pages(client, images, images, abort_after=3)
+
+    assert outcome.aborted is False
+    assert client.calls == 10
+    assert [f.reason for f in outcome.failures] == ["repeat"] * 3
+    assert outcome.ok_indices == list(range(3, 10))
+
+
+def test_connection_failures_still_abort_after_repeat():
+    """仕様「接続不可は従来どおり打ち切りに数える」: 反復を挟んでも接続不可×3 で止まる
+
+    反復は数えないがリセットもしないので、反復→接続不可×3 の並びで打ち切る。
+    """
+    images = _pages(10)
+    fail_at = {1: OllamaRepeatError("反復")}
+    fail_at.update({i: OllamaConnectionError("停止中") for i in range(2, 11)})
+    client = _FakeClient(fail_at)
+
+    outcome = _ocr_pages(client, images, images, abort_after=3)
+
+    assert outcome.aborted is True
+    assert client.calls == 4
+    assert [f.reason for f in outcome.failures] == ["repeat"] + ["connection"] * 3
 
 
 def test_on_page_error_abort_keeps_old_behavior():
@@ -432,3 +480,81 @@ def test_saved_sources_match_successful_pages(tmp_path):
     assert meta["sources"] == ["source_01.png", "source_02.png", "source_03.png"]
     assert not (doc_dir / "source_04.png").exists()
     assert meta["pages"]["succeeded"] == 3
+
+
+# ---------- G12: 反復・上限到達・再試行の警告と記録 ----------
+
+
+def _page_output(capsys, extras: dict) -> str:
+    """1ページ分の OCR を流し、画面表示を返す"""
+    client = _FakeClient(extras={1: extras})
+    image = Path("input/p001.png")
+
+    result = _run_ocr_page(client, image, image)
+
+    assert not isinstance(result, MetaPageFailure)  # どの警告でも成功ページのまま
+    return capsys.readouterr().out
+
+
+def test_trimmed_page_shows_warning_with_chars(capsys):
+    """反復を切り落としたページは、ページ名と字数入りの警告が出る"""
+    out = _page_output(capsys, {"trimmed_chars": 1234})
+
+    assert "反復" in out
+    assert "p001.png" in out
+    assert "1234 字" in out
+
+
+def test_hit_limit_page_tells_how_to_raise_limit(capsys):
+    """上限到達のページは、上限値と num_predict の案内が出る"""
+    out = _page_output(
+        capsys, {"hit_limit": True, "options": {"num_predict": 1024}}
+    )
+
+    assert "生成上限（1024 トークン）" in out
+    assert "num_predict" in out
+    assert "反復を検知" not in out  # 切り落とし無し＋上限到達＝本当に長いページ
+
+
+def test_retried_page_shows_attempts(capsys):
+    """再試行で成功したページは、何回目で成功したかが出る"""
+    out = _page_output(capsys, {"attempts": 2})
+
+    assert "再試行" in out
+    assert "2回目" in out
+
+
+def test_clean_page_has_no_warning(capsys):
+    """反復も上限到達も再試行も無いページは警告を出さない"""
+    out = _page_output(capsys, {})
+
+    assert "⚠" not in out
+
+
+def test_meta_records_repetition_and_hit_limit(tmp_path):
+    """反復の切り落とし字数と上限到達ページが meta.json の ocr セクションに残る"""
+    record = _record(
+        tmp_path,
+        ocr_meta=MetaOcr(
+            model="glm-ocr",
+            prompt="p",
+            elapsed_seconds=1.0,
+            repetition_trimmed={3: 900, 1: 1200},
+            hit_limit_pages=[3, 1],
+        ),
+    )
+
+    meta = _saved_meta(tmp_path, record)
+
+    # JSON のキーは文字列。ページ順に並べる
+    assert meta["ocr"]["repetition_trimmed"] == {"1": 1200, "3": 900}
+    assert list(meta["ocr"]["repetition_trimmed"]) == ["1", "3"]
+    assert meta["ocr"]["hit_limit_pages"] == [1, 3]
+
+
+def test_meta_has_no_repetition_keys_when_clean(tmp_path):
+    """反復も上限到達も無ければキーを出さない（従来の meta.json と同じ形）"""
+    meta = _saved_meta(tmp_path, _record(tmp_path))
+
+    assert "repetition_trimmed" not in meta["ocr"]
+    assert "hit_limit_pages" not in meta["ocr"]
