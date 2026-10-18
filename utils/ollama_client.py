@@ -84,7 +84,7 @@ class OllamaRepeatError(Exception):
 # ---------- 反復の切り落とし ----------
 
 
-# 反復判定の閾値（根拠は openspec/changes/g12-ocr-repetition-loop/design.md の D1）
+# 反復判定の閾値（根拠は openspec/changes/archive/2026-10-18-g12-ocr-repetition-loop/design.md の D1）
 _SIMILAR_LINE_MIN_CHARS = 30  # これより短い行は完全一致だけで判定する（1字違いの表の行を守る）
 _SIMILAR_LINE_RATIO = 0.95  # 実際に反復した行の類似度は 0.99 以上だった
 _INLINE_FRAGMENT_CHARS = 20  # 行の中で再び現れたら反復と見なす文字列の長さ
