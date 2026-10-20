@@ -3,7 +3,7 @@
 戦前日本語OCRツールの作業ログ。会話が長引いて記憶が飛んでも、
 このファイルを読めば「今どこまで出来ていて、次に何をするか」が分かる状態を保つ。
 
-最終更新: 2026-10-18（G12 OCR 出力の反復ループ対策を実装・アーカイブし、仕様に統合）
+最終更新: 2026-10-21（OCR エンジンの再選定 → NDLOCR-Lite への切り替えを OpenSpec に起票。未着手）
 
 ---
 
@@ -24,34 +24,22 @@ OCRパイプラインの経路を1本化してテストの安全網を張り、�
 
 ---
 
-## 2. 直近の作業（2026-10-18）: G12 OCR 出力の反復ループ対策
+## 2. 直近の作業（2026-10-21）: OCR エンジンの再選定 → NDLOCR-Lite への切り替えを起票
 
-**問題**（調査は 2026-10-11、`survey/batch-slow-failure-survey.md`）: glm-ocr がこの資料（縦書き・旧字体）で全ページ同じ内容を繰り返し、
-1 枚 55 秒・反復検知の HTTP 500 でページ失敗・3 連続で誤打ち切り。反復入り本文で口語化チャンクも約 8 倍に膨らんでいた。
+**問題**: G12 で GLM-OCR の反復を抑えても、毎回丸ごと失われるページ（10 枚中 1 枚）と系統的な誤読（カタカナ「ニ」→「二」、旧字体→新字体）が残る。
 
-**やったこと**（設計は `openspec/changes/archive/2026-10-18-g12-ocr-repetition-loop/`。アーカイブ済みで、仕様は `openspec/specs/ocr-pipeline` と `cli` に統合した）
+**分かったこと**（`survey/ndlocr-lite-survey.md`・`survey/ocr-engine-comparison-2026-10.md`）
 
-| 対応 | 実装場所 |
-|---|---|
-| 反復の切り落とし `trim_repetition`（完全一致の行・30 字以上で類似度 0.95 以上の行・行の中で再び現れる 20 字以上の文字列。標準の `difflib`） | `utils/ollama_client.py` |
-| `[ocr] num_predict`（既定 1024、0 で無制限）と上限到達の検知（`done_reason == "length"`） | `utils/ollama_client.py`, `utils/config.py`, `config.toml` |
-| 反復検知の 500 を `OllamaRepeatError` → 理由 `repeat` に分類。連続失敗の打ち切りに数えない | `utils/ollama_client.py`, `scripts/ocr_vision_llm.py` |
-| シードを変えた再試行 `[ocr] retry_on_repeat`（**既定 0**＝仕組みだけ残す） | `utils/ollama_client.py` |
-| 切り落とし・上限到達・再試行の警告表示、`meta.json` の `ocr.repetition_trimmed` / `ocr.hit_limit_pages`（起きたときだけ） | `scripts/ocr_vision_llm.py`, `utils/library_writer.py` |
-| `prewar check` に Ollama のバージョン表示 | `scripts/setup_check.py` |
-| テスト 38 件追加。README に警告の意味と対処 | `tests/`, `README.md` |
+- 国立国会図書館の **NDLOCR-Lite**（2026-02 公開、v1.3.1、CPU/ONNX、CC BY 4.0）が最適。手元 10 枚で失敗 0・GLM-OCR より明らかに正確。
+  RapidOCR・Apple Live Text・VLM 各種（Qwen・Gemma・PaddleOCR-VL 等）・YomiToku・PaddleOCR は精度か依存で劣る
+- 公式は依存を `==` 固定（numpy 2.2.2 等）でプロジェクトの numpy 2.4.2 と衝突。**ただし固定を外しても 10 枚の結果が完全一致**し、
+  追加の依存は onnxruntime・Pillow・PyYAML・lxml・networkx・tqdm の 6 つだけ
+- v1.3.1 は**パッケージとして入れると起動しない**（`py-modules` の漏れ）。`uv tool install` も不可。ソースのまま使う必要がある
+- 関数を直接呼んでも CLI と完全一致。モデル読み込み 2.3 秒のあと 1 枚約 0.4 秒。画像前処理（A1）は NDLOCR-Lite では逆効果
 
-**実装中に設計を変えた 2 点**（りょうと合意済み。根拠は survey の追記）
-
-- 切り落としは当初「同じ行の 2 回目」だけだったが、実機では**10 枚中 4 枚で反復が残った**。glm-ocr は繰り返すたびに似た字へ読み違え（「橃」→「橝」）、
-  改行なしの 1 行の中で繰り返すページもある。→ 似た行・行内の 2 規則を追加。1 字違いの表の行を守るため、似た行の判定は 30 字以上に限定
-- シードを変えた再試行は効かなかった。temperature=0 ではシードが出力に影響しない（貪欲法）。0.3 にしても 8 回中 1 回しか抜けない → 既定 0
-
-**結果**: 10 枚の一括処理が 30 分以上 → **5 分 1 秒**（OCR 124 秒、口語化 2 チャンク）。失敗は 5 枚目の 1 枚だけで理由 `repeat`、打ち切りなし。
-
-**残ったこと**: 5 枚目のような反復検知の 500 は救えない（エンジン側の限界 → A2）。全ページで「生成上限」の警告が出てやや煩い
-（`num_predict` 700 なら 1 枚 10 秒だが、長い資料で欠ける余地が増えるため 1024 のまま）。
-Ollama は 0.40.2 → 0.40.5 に自動更新されていた。
+**次の一手**: `openspec/changes/ndlocr-lite-engine/`（起票済み・未着手、20 タスク）。submodule（`vendor/ndlocr-lite`、タグ 1.3.1）で取り込み、
+プロジェクトの環境で直接動かす。既定エンジンを NDLOCR-Lite に、GLM-OCR は `--model glm-ocr` で残す。`/opsx:apply` で実装に入る。
+あわせて OpenSpec CLI を 1.14.3 に上げ、長すぎる要件 2 つを分割した（どちらもコミット済み）。
 
 ---
 
@@ -74,7 +62,7 @@ Ollama は 0.40.2 → 0.40.5 に自動更新されていた。
 | 2026-09-22 | **G8**（不要依存・旧コマンド・効かない設定の削除、文書の食い違い修正。`.venv` 700MB→152MB） | 上記セクション2 |
 | 2026-10-04 | **D5**（複数画像のページ順を自然順に。並び順の表示・食い違い警告・`--order`・`.tif`/`.webp` の取りこぼし修正） | `openspec/changes/archive/2026-10-04-d5-page-order-sort/` |
 | 2026-10-11 | 一括処理の遅延・失敗の原因調査（glm-ocr の反復ループ）→ G12 起票、G13 を backlog に | `survey/batch-slow-failure-survey.md` |
-| 2026-10-18 | **G12**（反復の切り落とし・`num_predict` 上限・反復失敗の分類・Ollama バージョン表示。10 枚 30 分超 → 5 分） | 上記セクション2 |
+| 2026-10-18 | **G12**（反復の切り落とし・`num_predict` 上限・反復失敗の分類・Ollama バージョン表示。10 枚 30 分超 → 5 分） | `openspec/changes/archive/2026-10-18-g12-ocr-repetition-loop/` |
 
 ---
 
@@ -82,7 +70,8 @@ Ollama は 0.40.2 → 0.40.5 に自動更新されていた。
 
 `plan/improvement-ideas.md` の優先順位に従う。
 
-1. **D3 処理ログのファイル保存**（全部 print で揮発している） ← 次の候補
+0. **NDLOCR-Lite への切り替え**（`openspec/changes/ndlocr-lite-engine/` 起票済み） ← 次の候補
+1. **D3 処理ログのファイル保存**（全部 print で揮発している）
    （口語化の質では、D5 でページ順が正しくなったので **B3 ページ境界の連結 ＋ G11 失敗ページの目印** を1つの変更にまとめるのが効率的）
 2. G13 口語化チャンクの余裕（2,000 字で 4096 トークンの 92%。末尾が無言で欠けるリスク）と
    G9 口語化チャンクのフェイルファスト（G4で顕在化。無応答が続くと 300秒×チャンク数 待つ）は同じファイルなのでまとめてよい
