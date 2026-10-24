@@ -12,21 +12,25 @@ dependencies = [
     # ollama の推移的依存だが、タイムアウト例外(httpx.TimeoutException)を
     # utils/ollama_client.py で直接捕まえるため明示依存にしている
     "httpx>=0.27",
+    # lxml・networkx・onnxruntime・pillow・pyyaml・tqdm は NDLOCR-Lite（vendor/ndlocr-lite）の実行に要る。
+    # NDLOCR-Lite 自体はパッケージとして入れず、公式の == 固定も使わない（utils/ndlocr_client.py）
     "jaconv>=0.5.0",
+    "lxml>=6.1.3",
+    "networkx>=3.7",
     "numpy>=2.4.2",
     "ollama>=0.6.1",
+    "onnxruntime>=1.23.2",
     "opencv-python-headless>=4.11.0.86",
+    "pillow>=13.0.0",
+    "pyyaml>=6.0.3",
     "questionary>=2.1.1",
     "rich>=13.0",
     "senzen-word",
+    "tqdm>=4.70.1",
 ]
 
 [project.scripts]
 prewar = "scripts.cli:main"
-
-[project.optional-dependencies]
-# 補助OCR（現状はOCR処理に未使用。A2 複数エンジン比較用）。uv sync --extra surya で導入
-surya = ["surya-ocr>=0.17.1"]
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

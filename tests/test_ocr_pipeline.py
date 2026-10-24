@@ -14,27 +14,35 @@ import os
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from scripts import ocr_vision_llm
 from scripts.cli import _defaults_for
 from scripts.ocr_vision_llm import (
     BatchOcrOutcome,
     _build_record,
+    _create_ocr_client,
     _exit_code,
     process_batch,
     process_folder,
     process_single,
 )
+from utils.config import _DEFAULTS, Config, _deep_merge
 from utils.library_writer import SCHEMA_VERSION, MetaModernize, MetaPageFailure
-from utils.ollama_client import ImageFileError, OCRResult, OllamaConnectionError
+from utils.ndlocr_client import NdlocrLiteClient
+from utils.ollama_client import ImageFileError, OCRResult, OllamaConnectionError, OllamaOCRClient
 from utils.text_normalizer import normalize_text
 
 from fakes import (
     MODERN_MARK,
     EchoModernizer,
     FakeClient,
+    FakeNdlocrBackend,
     NameEchoClient,
     StubModernizer,
+    install_fake_ndlocr,
+    ndlocr_column,
+    ndlocr_line,
 )
 
 # 旧字体（關・狀）とカタカナ助詞（ノ）を含む、戦前公文書らしい1行
@@ -1060,3 +1068,189 @@ def test_select_images_batch_returns_in_page_order(tmp_path, monkeypatch):
 
     assert [p.name for p in by_name] == ["1.png", "2.png", "10.png"]
     assert [p.name for p in by_mtime] == ["10.png", "2.png", "1.png"]
+
+
+# ---------- OCR エンジンの選択と NDLOCR-Lite（ndlocr-lite-engine） ----------
+
+
+def _use_config(monkeypatch, overrides: dict | None = None) -> None:
+    """パイプラインが読む設定を「_DEFAULTS ＋ overrides」に差し替える（手元の config.toml に左右されない）"""
+    monkeypatch.setattr(ocr_vision_llm, "CONFIG", Config(_deep_merge(_DEFAULTS, overrides or {})))
+
+
+def _real_pngs(folder: Path, n: int) -> list[Path]:
+    """本物の PNG を n 枚作る（NDLOCR-Lite のクライアントは画像を開くため。前処理も通る大きさ）"""
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for i in range(1, n + 1):
+        path = folder / f"p{i:03d}.png"
+        Image.new("RGB", (120, 160), "white").save(path)
+        paths.append(path)
+    return paths
+
+
+def _ndlocr_client(tmp_path: Path, lines=None) -> NdlocrLiteClient:
+    """偽のバックエンドで動く本物の NdlocrLiteClient（版は 1.3.1）"""
+    root = install_fake_ndlocr(tmp_path / "ndlocr")
+    return NdlocrLiteClient(
+        root, backend=FakeNdlocrBackend(lines=lines), version_reader=lambda _root: "1.3.1"
+    )
+
+
+# 見出し・本文・横書きのページ番号（信頼度 0.6）からなる架空のページ
+_PAGE_WITH_NUMBER = [
+    ndlocr_column("第一章　總則", 940, length=300),
+    ndlocr_column("本令ハ公布ノ日ヨリ之ヲ施行ス", 900),
+    ndlocr_line("12", 500, 1150, 560, 1180, vertical=False, confidence=0.6),
+]
+
+
+def test_default_engine_is_ndlocr_lite(tmp_path, monkeypatch):
+    """既定のエンジンは NDLOCR-Lite"""
+    _use_config(monkeypatch)
+
+    assert _DEFAULTS["models"]["ocr"] == "ndlocr-lite"
+    assert isinstance(_create_ocr_client(_args(tmp_path)), NdlocrLiteClient)
+
+
+def test_runtime_option_selects_glm_ocr(tmp_path, monkeypatch):
+    """実行時に glm-ocr を指定すると、Ollama の GLM-OCR で読む"""
+    _use_config(monkeypatch)
+
+    client = _create_ocr_client(_args(tmp_path, model="glm-ocr"))
+
+    assert isinstance(client, OllamaOCRClient)
+    assert client.model == "glm-ocr"
+
+
+def test_config_selects_glm_ocr(tmp_path, monkeypatch):
+    """設定ファイルで glm-ocr にすると、実行時の指定なしで GLM-OCR を使う"""
+    _use_config(monkeypatch, {"models": {"ocr": "glm-ocr"}})
+
+    client = _create_ocr_client(_args(tmp_path))
+
+    assert isinstance(client, OllamaOCRClient)
+    assert client.model == "glm-ocr"
+
+
+def test_runtime_option_wins_over_config(tmp_path, monkeypatch):
+    """実行時の指定は設定ファイルより優先する"""
+    _use_config(monkeypatch, {"models": {"ocr": "glm-ocr"}})
+
+    assert isinstance(_create_ocr_client(_args(tmp_path, model="ndlocr-lite")), NdlocrLiteClient)
+
+
+def test_prompt_is_ignored_for_ndlocr_lite(tmp_path, monkeypatch, capsys):
+    """NDLOCR-Lite ではプロンプトを使わないので、指定されたら無視する旨を表示する"""
+    _use_config(monkeypatch)
+
+    client = _create_ocr_client(_args(tmp_path, prompt="縦書きを読んで"))
+
+    assert isinstance(client, NdlocrLiteClient)
+    assert "--prompt は無視します" in capsys.readouterr().out
+
+
+def test_prompt_is_used_for_glm_ocr(tmp_path, monkeypatch, capsys):
+    """GLM-OCR ではプロンプトがそのまま使われ、無視の表示は出ない"""
+    _use_config(monkeypatch)
+
+    client = _create_ocr_client(_args(tmp_path, model="glm-ocr", prompt="縦書きを読んで"))
+
+    assert client.prompt == "縦書きを読んで"
+    assert "無視" not in capsys.readouterr().out
+
+
+def test_ndlocr_record_keeps_engine_version_and_low_confidence(tmp_path, capsys):
+    """NDLOCR-Lite の記録: エンジン名と版が残り、信頼度の低い行の警告と行数が出る（ページは成功）"""
+    [image] = _real_pngs(tmp_path / "input", 1)
+    client = _ndlocr_client(tmp_path, _PAGE_WITH_NUMBER)
+
+    code = process_single(_args(tmp_path), image, client=client, modernizer=EchoModernizer())
+
+    assert code == 0
+    meta = _meta(_only_doc(tmp_path))
+    assert meta["ocr"]["model"] == "ndlocr-lite"
+    assert meta["ocr"]["engine_version"] == "1.3.1"
+    assert meta["ocr"]["low_confidence_lines"] == {"1": 1}
+    assert "repetition_trimmed" not in meta["ocr"]
+    assert "hit_limit_pages" not in meta["ocr"]
+    assert meta["title"] == "第一章　總則"  # 見出しが独立した行になり、題名に使われる（題名は OCR 生テキストから）
+    out = capsys.readouterr().out
+    assert "p001.png に認識の信頼度が低い行が 1 行あります" in out
+    assert "生成上限" not in out
+    assert "切り落としました" not in out
+
+
+def test_ndlocr_record_without_low_confidence(tmp_path, capsys):
+    """すべての行の信頼度が閾値以上なら、警告もメタ情報も出ない"""
+    [image] = _real_pngs(tmp_path / "input", 1)
+    client = _ndlocr_client(tmp_path, [ndlocr_column("本令ハ公布ノ日ヨリ之ヲ施行ス", 900)])
+
+    process_single(_args(tmp_path), image, client=client, modernizer=EchoModernizer())
+
+    assert "low_confidence_lines" not in _meta(_only_doc(tmp_path))["ocr"]
+    assert "信頼度が低い行" not in capsys.readouterr().out
+
+
+def test_glm_record_has_no_engine_version(tmp_path):
+    """GLM-OCR（Ollama 経由）の記録には engine_version も低信頼度の行数も出ない（従来の形）"""
+    [image] = _images(tmp_path / "input", 1)
+
+    process_single(_args(tmp_path), image, client=FakeClient(), modernizer=EchoModernizer())
+
+    meta = _meta(_only_doc(tmp_path))
+    assert "engine_version" not in meta["ocr"]
+    assert "low_confidence_lines" not in meta["ocr"]
+
+
+def test_ndlocr_is_not_preprocessed(tmp_path, monkeypatch):
+    """前処理が有効な設定のままでも、既定のエンジン（NDLOCR-Lite）には元画像が渡る"""
+    _use_config(monkeypatch, {"preprocess": {"enabled": True}})
+    [image] = _real_pngs(tmp_path / "input", 1)
+    client = _ndlocr_client(tmp_path)
+
+    process_single(
+        _args(tmp_path, no_preprocess=False), image, client=client, modernizer=EchoModernizer()
+    )
+
+    doc = _only_doc(tmp_path)
+    assert "preprocess" not in _meta(doc)
+    assert not list(doc.glob("preprocessed*"))
+    assert client._backend.recognized == ["p001.png"]  # 元画像の名前のまま渡った
+
+
+def test_glm_ocr_is_preprocessed(tmp_path, monkeypatch):
+    """前処理が有効な設定で GLM-OCR を選ぶと、従来どおり前処理後の画像を読み、記録に残る"""
+    _use_config(monkeypatch, {"preprocess": {"enabled": True}})
+    [image] = _real_pngs(tmp_path / "input", 1)
+    client = NameEchoClient()
+
+    process_single(
+        _args(tmp_path, no_preprocess=False, model="glm-ocr"),
+        image,
+        client=client,
+        modernizer=EchoModernizer(),
+    )
+
+    doc = _only_doc(tmp_path)
+    assert _meta(doc)["preprocess"]["enabled"] is True
+    assert _read(doc, "ocr_raw.txt").startswith("本文:pre_01")
+
+
+def test_build_record_collects_low_confidence_by_original_page(tmp_path):
+    """信頼度の低い行数は、失敗ページを飛ばした元のページ番号で集め、版は先頭ページのもの"""
+    images = [Path(f"p{i:03d}.png") for i in (1, 2, 3)]
+    failure = MetaPageFailure(index=2, source="p002.png", reason="unknown", message="壊")
+    results = [_ocr_result("一", 1.0, model="ndlocr-lite"), _ocr_result("三", 1.0, model="ndlocr-lite")]
+    results[1].low_confidence_lines = 2  # 3枚目
+    for result in results:
+        result.engine_version = "1.3.1"
+    outcome = _outcome(results, [0, 2], [failure])
+
+    record = _build_record(
+        _args(tmp_path), images, outcome, "一\n\n三", "現代語", MetaModernize(True, "m"), None, None
+    )
+
+    assert record.ocr_meta.low_confidence_lines == {3: 2}
+    assert record.ocr_meta.engine_version == "1.3.1"
+

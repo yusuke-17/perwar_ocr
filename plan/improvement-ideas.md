@@ -24,7 +24,7 @@
 
 | #  | 案 | 中身 | 効き | コスト |
 |----|----|------|------|--------|
-| A2 | 複数エンジン比較（GLM-OCR × Surya） | Surya は任意の追加依存（`uv sync --extra surya`）で導入できるが、OCR経路は未実装。両方走らせて差分を見る／統合する。難読箇所の発見に効く。**2026-10-21 追記**: NDL の CPU 版 OCR「NDLOCR-Lite」を手元 10 枚で試し、GLM-OCR より速く（10 枚 9 秒）正確で失敗 0 枚だった（`survey/ndlocr-lite-survey.md`）。比較より先に、メインエンジンの NDLOCR-Lite への切り替え（GLM-OCR は選択肢として残す）を起票するのがよい | ★★★ | 中 |
+| A2 | 複数エンジン比較（NDLOCR-Lite × GLM-OCR） | 両方走らせて差分を見る／統合する。当初の候補だった Surya は、2026-10-25 に追加依存ごと削除した（Pillow の版の衝突。比較調査でも見送り済み）。難読箇所の発見に効く。**2026-10-21 追記**: NDL の CPU 版 OCR「NDLOCR-Lite」を手元 10 枚で試し、GLM-OCR より速く（10 枚 9 秒）正確で失敗 0 枚だった（`survey/ndlocr-lite-survey.md`）。比較より先に、メインエンジンの NDLOCR-Lite への切り替え（GLM-OCR は選択肢として残す）を起票するのがよい。**2026-10-25 追記**: NDLOCR-Lite を既定に切り替えた（`openspec/changes/ndlocr-lite-engine/`）。残る A2 は併用で、NDLOCR-Lite の低信頼度の行（`meta.json` の `ocr.low_confidence_lines`）だけ GLM-OCR で読み直す・「禪禪」型の重複を突き合わせる、など | ★★★ | 中 |
 | A3 | 右横書き・回転の自動判定 | 戦前文書の制約として明記の対象。ページ方向検出と回転補正がまだない | ★★☆ | 中 |
 | A4 | OCR誤読辞書の拡充＋自動学習 | 現状6パターンの辞書＋文脈2パターンのみ（`utils/text_normalizer.py`）。ユーザー修正を辞書に還元する仕組み | ★★☆ | 小〜中 |
 

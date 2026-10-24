@@ -6,8 +6,8 @@
 
 ## 技術スタック
 - Python 3.13+ / uv（パッケージ管理）
-- Ollama + GLM-OCR（メインOCRエンジン、0.9B）
-- Surya OCR（任意の追加依存 `uv sync --extra surya`。現状 OCR 処理には未使用。A2 複数エンジン比較の候補）
+- NDLOCR-Lite（既定のOCRエンジン、国立国会図書館、CPU/ONNX、CC BY 4.0）。git submodule で `vendor/ndlocr-lite`（タグ 1.3.1）に置き、ソースのまま `utils/ndlocr_client.py` から呼ぶ
+- Ollama + GLM-OCR（0.9B。`--model glm-ocr` / `[models] ocr` で選べる OCR エンジン）
 - 後処理: senzen_word（旧字体・仮名変換、自作PyPIパッケージ）、jaconv（全角正規化）、LLMリライト（qwen3.5:9b）
 
 ## よく使うコマンド
@@ -45,6 +45,7 @@ uv add <package>
 - `pkg/senzen_word/` - 自作文字変換ライブラリ（PyPI公開用、独立パッケージ）
 - `scripts/` - 実行スクリプト（CLI）
 - `utils/` - PJ固有ユーティリティ（Ollama, OCR, LLM等）
+- `vendor/ndlocr-lite/` - NDLOCR-Lite のソースとモデル（git submodule。中身は編集しない）
 - `input/` / `output/` - 入出力データ（Git管理外）
 - `config.toml` - 設定の上書きファイル（モデル名/パス/チャンク/LLM/OCR/Ollama通信/検索/差分表示/画像前処理/一括処理/進捗表示）。Git管理
 - `openspec/` - 仕様駆動開発（OpenSpec）。`specs/` が正の仕様、`changes/` が進行中の変更

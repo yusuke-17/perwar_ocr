@@ -1,6 +1,6 @@
 """テスト用の手書きフェイク（複数のテストファイルで共有する）
 
-Ollama に接続せずに OCR パイプラインを動かすための最小限の偽物。
+Ollama にも NDLOCR-Lite にも頼らずに OCR パイプラインを動かすための最小限の偽物。
 プロジェクトの決めごとにより unittest.mock は使わず、必要な振る舞いだけを持つ
 クラスを手で書く。本番の OllamaOCRClient / TextModernizer とはダックタイピングで
 差し替える（ocr() / modernize_detailed() と model 属性があればよい）。
@@ -11,6 +11,7 @@ tests/ には __init__.py が無く、pytest の既定動作で tests/ が impor
 
 from pathlib import Path
 
+from utils.ndlocr_client import REQUIRED_FILES
 from utils.ollama_client import OCRResult
 from utils.text_modernizer import ModernizeResult
 
@@ -114,3 +115,74 @@ class EchoModernizer:
     def modernize_detailed(self, text: str) -> ModernizeResult:
         self.calls += 1
         return ModernizeResult(text=f"{MODERN_MARK}{text}", chunk_total=1)
+
+
+# ---------- NDLOCR-Lite ----------
+# 行データは実機の json_lines の形だけを写した架空のもの（資料の本文は入れない）。
+# 縦書きのページを右から左へ読む。列の幅 30、本文の列の長さは 1000（y=100〜1100）。
+
+
+def ndlocr_line(text, x0, y0, x1, y1, *, vertical, confidence=0.95):
+    """実機の json_lines と同じ形の 1 行（boundingBox の 4 点の並びも実機どおり）"""
+    return {
+        "boundingBox": [[x0, y0], [x0, y1], [x1, y0], [x1, y1]],
+        "id": 0,
+        "isVertical": "true" if vertical else "false",
+        "text": text,
+        "isTextline": "true",
+        "confidence": confidence,
+        "class_index": 1,
+    }
+
+
+def ndlocr_column(text, x, length=1000, top=100, confidence=0.95):
+    """縦書きの 1 列（x は列の左端）"""
+    return ndlocr_line(text, x, top, x + 30, top + length, vertical=True, confidence=confidence)
+
+
+def install_fake_ndlocr(root: Path, skip=()) -> Path:
+    """NDLOCR-Lite の導入に要るファイルを空で置く（skip に挙げたものは置かない）"""
+    for name in REQUIRED_FILES:
+        if name in skip:
+            continue
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_bytes(b"")
+    return root
+
+
+class FakeNdlocrBackend:
+    """NDLOCR-Lite の読み込みと認識の偽物（NdlocrLiteClient の backend= に渡す）
+
+    lines: recognize が返す行のリスト
+    import_error / load_error: 読み込みで投げる例外
+    recognize_errors: {1始まりの呼び出し回数: 投げる例外}
+    imports / loads / recognized に呼ばれた回数と画像名が残る。
+    """
+
+    def __init__(self, lines=None, import_error=None, load_error=None, recognize_errors=None):
+        self.lines = lines if lines is not None else [ndlocr_column("本文ノ列", 900)]
+        self.import_error = import_error
+        self.load_error = load_error
+        self.recognize_errors = recognize_errors or {}
+        self.imports = 0
+        self.loads = 0
+        self.recognized: list[str] = []
+
+    def import_module(self, root):
+        self.imports += 1
+        if self.import_error is not None:
+            raise self.import_error
+
+    def load_models(self, root):
+        self.loads += 1
+        if self.load_error is not None:
+            raise self.load_error
+
+    def recognize(self, image, name):
+        self.recognized.append(name)
+        error = self.recognize_errors.get(len(self.recognized))
+        if error is not None:
+            raise error
+        assert image.ndim == 3 and image.shape[2] == 3  # RGB の配列で渡る
+        return self.lines
+

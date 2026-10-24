@@ -5,7 +5,7 @@
 # ここに書いた行だけが効き、消せばデフォルトに戻る。空でも動く。
 
 [models]
-ocr = "glm-ocr"          # OCRに使うモデル
+ocr = "ndlocr-lite"      # OCRエンジン: "ndlocr-lite"（既定）か Ollama のモデル名（"glm-ocr" など）
 modernize = "qwen3.5:9b" # 口語体変換に使うモデル
 
 # 以下も上書きできる（必要になったらコメントを外して値を書く）:
@@ -24,7 +24,7 @@ modernize = "qwen3.5:9b" # 口語体変換に使うモデル
 # top_k = 40
 # repeat_penalty = 1.1
 #
-# [ocr]                   # OCRの生成パラメータ（そのままOllamaのoptionsに渡る）
+# [ocr]                   # OCRの生成パラメータ（そのままOllamaのoptionsに渡る。GLM-OCR など Ollama 経由のときだけ効く）
 # temperature = 0.0       # 0 = 同じ画像なら同じ結果。読み取りに創造性は不要
 # seed = 0                # サンプリングの揺らぎを固定（再現性のため）
 # repeat_penalty = 1.0    # 繰り返しを罰しない。表・数字の羅列が多い文書向け（既定は未指定）
@@ -36,6 +36,10 @@ modernize = "qwen3.5:9b" # 口語体変換に使うモデル
 #                         # temperature=0 ではシードが結果に影響しないので、使うなら temperature も上げる
 #                         # （ただし同じ画像でも結果が毎回変わる。実測では 0.3 で8回中1回しか成功しない）
 #
+# [ndlocr]                # NDLOCR-Lite（既定の OCR エンジン）の設定
+# path = "vendor/ndlocr-lite"  # ソースの場所（相対パスはプロジェクト直下から）
+# low_confidence = 0.7    # 行の認識の信頼度がこれ未満なら警告する（prewar diff で確認できる）
+#
 # [ollama]                # Ollamaとの通信設定（生成パラメータではない）
 # generate_timeout_seconds = 300  # 生成1回の上限秒数。0で無制限（従来の挙動に戻す）
 # list_timeout_seconds = 15       # モデル一覧など軽いAPIの上限秒数
@@ -46,7 +50,7 @@ modernize = "qwen3.5:9b" # 口語体変換に使うモデル
 # snippet_chars = 40     # 抜粋の長さ（--snippet で実行時に変更可。上限64）
 # color = true           # 一致箇所の色付け（--no-color / NO_COLOR / 非tty でも無効）
 #
-# [preprocess]            # 画像前処理（OCR入力前の整形・A1）
+# [preprocess]            # 画像前処理（OCR入力前の整形・A1）。GLM-OCR を選んだときだけ効く（NDLOCR-Lite にはかけない）
 # enabled = true          # 前処理全体のON/OFF（--no-preprocess で実行時OFF）
 # deskew = true           # 傾き補正
 # denoise = true          # ノイズ除去（軽め）

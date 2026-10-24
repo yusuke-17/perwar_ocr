@@ -23,6 +23,9 @@ G12 で切り落としと上限を入れて 1 枚 55 秒 → 14 秒にしたが�
   記録のメタ情報に残す（起きたときだけ）
 - **NDLOCR-Lite には画像前処理をかけない**: 手元の比較で、前処理後の画像は信頼度が下がり、1 枚は 37 字欠けたため。
   前処理（A1）は GLM-OCR を選んだときだけ適用する
+- **Surya OCR の追加依存を削除する**（実装中に追加）: `surya-ocr` が Pillow を 11 未満に固定するため、NDLOCR-Lite に要る Pillow と
+  同じロックファイルで解決できない（Python 3.14 では Pillow 10.4.0 の配布物が無く、ソースのビルドも失敗する）。Surya は処理から使われておらず、
+  比較調査で見送り済み（`survey/ocr-engine-comparison-2026-10.md`）。`uv sync --extra surya`・`prewar check` の Surya の項目・関連する要件を外す
 - **環境確認（`prewar check`）を選んだエンジンに合わせる**: NDLOCR-Lite が既定のときは NDLOCR-Lite の導入と版を必須項目にし、
   GLM-OCR モデルは任意項目にする。Ollama 接続は口語化に要るので引き続き必須
 
@@ -48,7 +51,9 @@ NDLOCR-Lite のソースを取得していない環境（`git submodule update -
 
 - `ocr-pipeline`: 「OCR 出力の反復の切り落とし」「OCR の生成トークン数の上限」を Ollama 経由のエンジン（GLM-OCR）に限定する。
   「完全ローカル動作の維持」に、NDLOCR-Lite も手元で動かすこと・自動テストが NDLOCR-Lite なしで通ることを加える
-- `cli`: 「環境確認の合否判定」の必須項目を、選ばれた OCR エンジンに合わせて変える（NDLOCR-Lite の導入と版／GLM-OCR モデル）
+- `cli`: 「環境確認の合否判定」の必須項目を、選ばれた OCR エンジンに合わせて変える（NDLOCR-Lite の導入と版／GLM-OCR モデル）。
+  「確認する依存パッケージの範囲」に NDLOCR-Lite の実行に要るパッケージを加える（Pillow は使うパッケージになる）。
+  Surya OCR のための「任意機能の未導入を失敗扱いしない」を削除する
 
 ## Impact
 
@@ -67,5 +72,6 @@ NDLOCR-Lite のソースを取得していない環境（`git submodule update -
 - ドキュメント: `README.md`（submodule の取得手順・エンジンの切り替え・CC BY 4.0 と DINOv3 ライセンスの出典表示）、`CLAUDE.md`（技術スタック）、`PROGRESS.md`、
   `plan/improvement-ideas.md`
 - 依存: `pyproject.toml` に `onnxruntime>=1.23.2`・`pillow`・`pyyaml`・`lxml`・`networkx`・`tqdm` を追加（どれも版の固定なし。
-  numpy 2.4.2・onnxruntime 1.31.0 で解決と動作を確認済み）。NDLOCR-Lite 自体はパッケージとして入れない
+  numpy 2.4.2・onnxruntime 1.31.0 で解決と動作を確認済み）。NDLOCR-Lite 自体はパッケージとして入れない。
+  `[project.optional-dependencies]` の `surya` を削除
 - 外部送信: なし。NDLOCR-Lite はモデル同梱で実行時に通信しない（コードを確認済み）。submodule の取得時に GitHub から取得するのみ

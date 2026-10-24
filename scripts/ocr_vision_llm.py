@@ -47,8 +47,13 @@ from utils.library_writer import (
     MetaPreprocess,
     save_document,
 )
+from utils.ndlocr_client import (
+    NDLOCR_ENGINE,
+    NdlocrError,
+    NdlocrLiteClient,
+    NdlocrNotInstalledError,
+)
 from utils.ollama_client import (
-    DEFAULT_MODEL,
     ImageFileError,
     OCRResult,
     OllamaConnectionError,
@@ -87,8 +92,11 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--model",
         "-m",
         type=str,
-        default=DEFAULT_MODEL,
-        help=f"OCR用モデル名（デフォルト: {DEFAULT_MODEL}）",
+        default=None,
+        help=(
+            f"OCRエンジン: {NDLOCR_ENGINE} か Ollama のモデル名（glm-ocr など）"
+            f"（デフォルト: config の [models] ocr = {CONFIG.get('models.ocr')}）"
+        ),
     )
     parser.add_argument(
         "--output",
@@ -266,9 +274,22 @@ def _save_legacy(text: str, image_paths: list[Path], output_dir: Path) -> Path:
     return output_file
 
 
-def _create_ocr_client(args: argparse.Namespace) -> OllamaOCRClient:
-    """引数からOCRクライアントを生成する"""
-    client_kwargs = {"model": args.model}
+def _ocr_engine(args: argparse.Namespace) -> str:
+    """使う OCR エンジン名。実行時の --model を設定の [models] ocr より優先する
+
+    "ndlocr-lite" なら NDLOCR-Lite、それ以外は Ollama のモデル名（glm-ocr など）。
+    """
+    return getattr(args, "model", None) or CONFIG.get("models.ocr") or NDLOCR_ENGINE
+
+
+def _create_ocr_client(args: argparse.Namespace) -> OllamaOCRClient | NdlocrLiteClient:
+    """引数からOCRクライアントを生成する（どちらも ocr() と model 属性を持つ）"""
+    engine = _ocr_engine(args)
+    if engine == NDLOCR_ENGINE:
+        if args.prompt is not None:
+            print("⚠ NDLOCR-Lite はプロンプトを使わないため、--prompt は無視します")
+        return NdlocrLiteClient()
+    client_kwargs = {"model": engine}
     if args.prompt is not None:
         client_kwargs["prompt"] = args.prompt
     return OllamaOCRClient(**client_kwargs)
@@ -282,6 +303,8 @@ _OCR_ERROR_KINDS: list[tuple[type[Exception], str, str]] = [
     (OllamaTimeoutError, "timeout", "Ollamaタイムアウト"),
     (OllamaModelNotFoundError, "model", "モデルエラー"),
     (OllamaRepeatError, "repeat", "反復による打ち切り"),
+    (NdlocrNotInstalledError, "model", "OCRエンジン未導入"),
+    (NdlocrError, "unknown", "NDLOCR-Lite の認識エラー"),
 ]
 
 # 連続失敗の打ち切りに数えない理由コード。Ollama 停止と違い、次のページは成功しうるため
@@ -334,10 +357,11 @@ def _run_ocr_page(
 
 
 def _warn_ocr_quality(result: OCRResult, source: Path) -> None:
-    """再試行・反復の切り落とし・生成上限への到達を警告として表示する（G12）
+    """再試行・反復の切り落とし・生成上限への到達・信頼度の低い行を警告として表示する
 
     どれも成功ページの扱いは変えない。「静かに壊れない」ための表示で、
-    反復の警告なしで上限の警告だけ出たら、そのページは本当に長いと判断できる。
+    反復の警告なしで上限の警告だけ出たら、そのページは本当に長いと判断できる（G12）。
+    信頼度の低い行は NDLOCR-Lite だけが数える。
     """
     if result.attempts > 1:
         print(
@@ -357,6 +381,11 @@ def _warn_ocr_quality(result: OCRResult, source: Path) -> None:
             f"    → 反復の警告が出ていなければ本当に長いページです。"
             f"config.toml の [ocr] num_predict を増やすと改善することがあります"
         )
+    if result.low_confidence_lines:
+        print(
+            f"  ⚠ {source.name} に認識の信頼度が低い行が {result.low_confidence_lines} 行あります"
+            f"（prewar diff で確認できます）"
+        )
 
 
 def _preprocess_images(
@@ -366,6 +395,8 @@ def _preprocess_images(
 
     無効（--no-preprocess または config の preprocess.enabled=False）なら
     (None, None) を返し、呼び出し側は元画像をそのままOCRに使う。
+    NDLOCR-Lite で読むときも、設定にかかわらず前処理しない
+    （前処理後の画像は信頼度が下がり、字が欠けたページもあったため。design.md の D5）。
 
     1枚が失敗したときは**そのページだけ元画像にフォールバック**し、
     他ページの前処理結果は捨てない（全滅した場合のみ (None, None)）。
@@ -375,6 +406,8 @@ def _preprocess_images(
         (OCRに使う画像パスのリスト, MetaPreprocess) または (None, None)
     """
     if args.no_preprocess or not CONFIG.get("preprocess.enabled", True):
+        return None, None
+    if _ocr_engine(args) == NDLOCR_ENGINE:
         return None, None
 
     options = options_from_config(binarize_override=args.binarize)
@@ -719,6 +752,9 @@ def _build_record(
     pairs = list(zip(outcome.ok_indices, outcome.results))
     repetition_trimmed = {i + 1: r.trimmed_chars for i, r in pairs if r.trimmed_chars}
     hit_limit_pages = [i + 1 for i, r in pairs if r.hit_limit]
+    low_confidence_lines = {
+        i + 1: r.low_confidence_lines for i, r in pairs if r.low_confidence_lines
+    }
 
     return DocumentRecord(
         source_paths=ok_sources,
@@ -731,6 +767,8 @@ def _build_record(
             options=first.options,
             repetition_trimmed=repetition_trimmed,
             hit_limit_pages=hit_limit_pages,
+            low_confidence_lines=low_confidence_lines,
+            engine_version=first.engine_version,
         ),
         normalization=MetaNormalization(
             old_kanji=normalized,
