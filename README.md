@@ -2,7 +2,8 @@
 
 戦前の日本語公文書（JACAR資料等）をOCRで読み取り、現代日本語に変換するツール。
 
-Ollama + GLM-OCR（OCR専用Vision LLM）をMacのローカルで動かすことで、CJK文字の高精度認識を **データ漏洩ゼロ** で実現する。
+OCR は国立国会図書館の [NDLOCR-Lite](https://github.com/ndl-lab/ndlocr-lite)（CPU で動く OCR）、口語体変換は Ollama + qwen3.5 を
+Mac のローカルで動かすことで、**データ漏洩ゼロ** で実現する。OCR エンジンは Ollama の GLM-OCR（OCR専用Vision LLM）にも切り替えられる。
 
 ## 前提条件
 
@@ -21,14 +22,30 @@ https://ollama.com/download/mac からダウンロードし、Applications に�
 ### 2. モデルのダウンロード
 
 ```bash
-# OCR用モデル（必須）
-ollama pull glm-ocr
-
 # 口語体変換用モデル（必須）
 ollama pull qwen3.5:9b
+
+# OCR を GLM-OCR で行う場合だけ（既定の NDLOCR-Lite では不要）
+ollama pull glm-ocr
 ```
 
-### 3. uv のインストールと依存パッケージの導入
+### 3. NDLOCR-Lite（既定の OCR エンジン）の取得
+
+NDLOCR-Lite は git の submodule として `vendor/ndlocr-lite` に置く（タグ 1.3.1 に固定。モデル込みで約 160MB）。
+パッケージとしてではなく、ソースのまま使う（上流の配布設定の不具合で、インストールすると起動しないため）。
+
+```bash
+# これから clone するなら、submodule もまとめて取る
+git clone --recurse-submodules --shallow-submodules <このリポジトリのURL>
+
+# clone 済みなら、リポジトリのフォルダで次を実行する
+git submodule update --init --depth 1
+```
+
+普通の `git clone` だけでは `vendor/ndlocr-lite` が空のままになる。その状態で OCR すると
+「OCRエンジン未導入」のエラーになり、取得コマンドが表示される（`git pull` でも submodule の中身は更新されない）。
+
+### 4. uv のインストールと依存パッケージの導入
 
 ```bash
 # uv のインストール（未導入の場合）
@@ -39,14 +56,7 @@ cd prewar-ocr
 uv sync
 ```
 
-補助OCRの Surya OCR は任意の追加依存で、通常の `uv sync` では入らない（torch 等を含み約500MBあるため）。
-現状の OCR 処理では使っていない。試したい場合だけ次で導入する。
-
-```bash
-uv sync --extra surya
-```
-
-### 4. セットアップ確認
+### 5. セットアップ確認
 
 ```bash
 uv run prewar check
@@ -134,7 +144,7 @@ uv run prewar ocr input/scans/ --order mtime
 
 `config.toml` の `[batch] order = "mtime"` で既定を変えることもできる（`--order` が優先）。
 
-対象になる画像は `.png .jpg .jpeg .webp .bmp .tiff .tif`。名前が `.` で始まる隠しファイルと、フォルダは対象外。1ファイルに複数ページを持つ TIFF は、前処理（既定で有効）が先頭ページしか読まない（実測で確認）ので、1ページ1ファイルにして使う。
+対象になる画像は `.png .jpg .jpeg .webp .bmp .tiff .tif`。名前が `.` で始まる隠しファイルと、フォルダは対象外。1ファイルに複数ページを持つ TIFF は先頭ページしか読まれない（NDLOCR-Lite の読み込みも、GLM-OCR で使う前処理も先頭ページだけ）ので、1ページ1ファイルにして使う。
 
 ### 出力フォーマット
 
@@ -167,8 +177,8 @@ uv run prewar ocr input/画像.png --library-root mylib/
 # ファイル保存せずコンソール出力のみ
 uv run prewar ocr input/画像.png --no-save
 
-# OCR用モデルを変更
-uv run prewar ocr input/画像.png -m qwen3-vl
+# OCRエンジンを変更（既定は ndlocr-lite。Ollama のモデル名を書けば Ollama で読む）
+uv run prewar ocr input/画像.png -m glm-ocr
 
 # 撮影のみ行い処理は後回し（shoot と併用）
 uv run prewar shoot --no-run
@@ -197,7 +207,50 @@ Ctrl+C で中断した場合も、そこまでの結果は保存される。
 - OCR エンジンが同じ内容を繰り返して Ollama に打ち切られたページは `reason: "repeat"` としてスキップされる。
   これは連続失敗の回数に**数えない**（Ollama 停止とは違い、次のページは成功しうるため）
 
-### OCRの反復対策と警告
+### OCR エンジン（NDLOCR-Lite / GLM-OCR）
+
+既定は NDLOCR-Lite。手元の 10 枚では GLM-OCR より正確で、失敗 0 枚・1 枚約 0.4 秒だった
+（最初の 1 枚の前にモデルの読み込みが 2 秒ほどかかる。`survey/ndlocr-lite-survey.md`）。
+GLM-OCR に戻すには、実行時に `-m glm-ocr` を付けるか、`config.toml` に次を書く。
+
+```toml
+[models]
+ocr = "glm-ocr"   # 既定は "ndlocr-lite"
+```
+
+- **画像前処理（傾き補正・コントラスト強調など）は NDLOCR-Lite にはかけない**。前処理後の画像は認識の信頼度が下がり、
+  字が欠けたページもあったため。`--no-preprocess`・`--binarize` と `[preprocess]` は GLM-OCR を選んだときだけ効く
+- `--prompt` は NDLOCR-Lite では使わない（指定すると無視する旨が出る）
+- NDLOCR-Lite の出力は、縦書きの列を文としてつなぎ、見出しや段落の終わり（短い列）と、横書きのページ番号などの前後で改行する。
+  日本語に隣り合う半角空白は取り除く（字は変えない）
+- 使ったエンジンは `meta.json` の `ocr.model` に、NDLOCR-Lite の版は `ocr.engine_version` に残る
+
+| 画面の警告 | 意味 | 対処 |
+|---|---|---|
+| `⚠ … に認識の信頼度が低い行が N 行あります` | NDLOCR-Lite が自信のない行があった（既定は信頼度 0.7 未満）。ページ番号などの短い行に多い | `uv run prewar diff <doc_id>` で原文を確認する。閾値は `[ndlocr] low_confidence` で変えられる |
+| `✗ OCRエンジン未導入` | `vendor/ndlocr-lite` が空、モデルが足りない、または依存パッケージが足りない | 表示どおり `git submodule update --init --depth 1` と `uv sync` を実行する |
+
+信頼度の低い行があったページは `meta.json` の `ocr.low_confidence_lines`（ページ番号 → 行数）に残る（あったときだけ）。
+
+#### NDLOCR-Lite の版を上げるとき
+
+上流の内部関数を直接呼んでいるので、版を上げたら動作を確かめてからコミットする。
+
+```bash
+git -C vendor/ndlocr-lite fetch --depth 1 origin tag <新しいタグ>
+git -C vendor/ndlocr-lite checkout <新しいタグ>
+uv run pytest tests/ pkg/                  # 上流との結合テスト（tests/test_ndlocr_upstream.py）を含む
+uv run prewar check                        # 新しい版が表示されること
+# 手元の画像をいくつか読み、前の版の記録と prewar diff などで比べてから
+git add vendor/ndlocr-lite
+git commit -m "NDLOCR-Liteを<新しいタグ>に更新"
+```
+
+モデルのファイル名が変わった版では、`utils/ndlocr_client.py` のモデル名（v1.3.1 の CLI の既定値を写したもの）も直す。
+
+### OCRの反復対策と警告（GLM-OCR）
+
+GLM-OCR（Ollama 経由のエンジン）を選んだときの話。NDLOCR-Lite の出力には反復の切り落としも生成上限も適用しない。
 
 glm-ocr は縦書き・旧字体の資料で、読み終えたあとも同じ内容を延々と繰り返すことがある。
 そのため OCR の結果は自動で次のように扱う。
@@ -399,9 +452,18 @@ uv run prewar clean library 2026-05-24_画像名    # ドキュメントIDを指
 | `output/` | `--legacy-output` 指定時の旧形式出力先 |
 | `scripts/` | CLI（統合コマンド `prewar` と各サブコマンドの中身） |
 | `utils/` | OCR・正規化・口語体変換・ライブラリ保存などのユーティリティ |
+| `vendor/ndlocr-lite/` | NDLOCR-Lite のソースとモデル（git submodule。`git submodule update --init --depth 1` で取得） |
 | `pkg/senzen_word/` | 旧字体・仮名変換ライブラリ（自作PyPIパッケージ） |
 | `tests/` | テスト（`uv run pytest tests/ pkg/`） |
 | `config.toml` | 設定の上書き（既定値から変えたい値だけを書く） |
 | `openspec/` | 仕様（`specs/`）と進行中の変更（`changes/`） |
 | `plan/` | 改善案のバックログ |
 | `survey/` | 調査レポート |
+
+## ライセンスと出典
+
+- OCR エンジンとして、国立国会図書館が公開する [NDLOCR-Lite](https://github.com/ndl-lab/ndlocr-lite)（v1.3.1）を使用している。
+  NDLOCR-Lite は [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ja) で公開されている（出典: 国立国会図書館「NDLOCR-Lite」）。
+  ソースには手を加えていない。実行時に使うライブラリのライセンスは `vendor/ndlocr-lite/LICENCE_DEPENDENCEIES` を参照
+- NDLOCR-Lite のレイアウト認識モデルは DEIMv2（Apache License 2.0）で、Meta の DINOv3 を基にしているため、
+  その利用には DINOv3 のライセンスの条件も適用される（`survey/ndlocr-lite-survey.md`）

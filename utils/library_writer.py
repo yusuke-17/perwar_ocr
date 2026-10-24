@@ -57,6 +57,10 @@ class MetaOcr:
     repetition_trimmed: dict[int, int] = field(default_factory=dict)
     # 生成上限（num_predict）に達して終わったページ番号（1始まり）
     hit_limit_pages: list[int] = field(default_factory=list)
+    # 認識の信頼度が閾値未満の行の数 {1始まりのページ番号: 行数}（NDLOCR-Lite）
+    low_confidence_lines: dict[int, int] = field(default_factory=dict)
+    # OCR エンジンの版（NDLOCR-Lite のときだけ。取れなければ「不明」）
+    engine_version: str = ""
 
 
 @dataclass
@@ -269,6 +273,14 @@ def save_document(
         }
     if record.ocr_meta.hit_limit_pages:
         meta["ocr"]["hit_limit_pages"] = sorted(record.ocr_meta.hit_limit_pages)
+    # 信頼度の低い行があった場合と、NDLOCR-Lite の版はあるときだけ残す（GLM-OCR の記録は従来どおり）
+    if record.ocr_meta.low_confidence_lines:
+        meta["ocr"]["low_confidence_lines"] = {
+            str(index): lines
+            for index, lines in sorted(record.ocr_meta.low_confidence_lines.items())
+        }
+    if record.ocr_meta.engine_version:
+        meta["ocr"]["engine_version"] = record.ocr_meta.engine_version
 
     # 口語体変換が部分的にしか成功しなかった場合のみ、その事実を残す（G2b）
     if record.modernize.error:

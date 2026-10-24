@@ -27,7 +27,8 @@ from typing import Any
 # config.toml で上書きできるキーの一覧でもある。
 
 _DEFAULTS: dict[str, Any] = {
-    "models": {"ocr": "glm-ocr", "modernize": "qwen3.5:9b"},
+    # ocr: OCR エンジン。"ndlocr-lite"（NDLOCR-Lite）か Ollama のモデル名（"glm-ocr" など）
+    "models": {"ocr": "ndlocr-lite", "modernize": "qwen3.5:9b"},
     # Ollama との「通信」の設定（生成パラメータではない）。全 Ollama 呼び出しで共有する。
     "ollama": {
         # chat（生成）1回あたりの上限秒数。超えたら OllamaTimeoutError。
@@ -61,6 +62,14 @@ _DEFAULTS: dict[str, Any] = {
         # 生成パラメータではない。シードを変えて再試行するが、temperature=0 では
         # シードが出力に影響しないため既定は 0（再試行しない）。実測は survey/batch-slow-failure-survey.md
         "retry_on_repeat": 0,
+    },
+    # NDLOCR-Lite（OCR エンジン）の設定。[ocr] は Ollama の options にそのまま渡るので混ぜない
+    "ndlocr": {
+        # NDLOCR-Lite のソースの場所（submodule）。相対パスはプロジェクト直下から
+        "path": "vendor/ndlocr-lite",
+        # 行の認識の信頼度がこれ未満なら警告する（閾値ちょうどは警告しない）。
+        # 手元 10 枚では本文の行は 0.9 前後、ページ番号などの短い行が 0.6〜0.75
+        "low_confidence": 0.7,
     },
     "search": {
         "limit": 20,

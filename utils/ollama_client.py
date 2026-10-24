@@ -15,7 +15,9 @@ from utils.config import CONFIG
 
 # ---------- 定数 ----------
 
-DEFAULT_MODEL = CONFIG.get("models.ocr")
+# Ollama で OCR するときの既定のモデル。どのエンジンで読むか（NDLOCR-Lite か Ollama のモデルか）は
+# 設定の [models] ocr と --model が決める（scripts/ocr_vision_llm.py の _ocr_engine）
+DEFAULT_MODEL = "glm-ocr"
 
 DEFAULT_PROMPT = "画像内のテキストをすべて正確に読み取ってください。"
 
@@ -42,6 +44,8 @@ class OCRResult:
     trimmed_chars: int = 0  # 反復として切り落とした字数（0 なら切り落とし無し）
     hit_limit: bool = False  # 生成トークン数の上限（num_predict）に達して終わったか
     attempts: int = 1  # 反復による失敗の再試行を含めた試行回数
+    low_confidence_lines: int = 0  # 認識の信頼度が閾値未満の行の数（NDLOCR-Lite のみ）
+    engine_version: str = ""  # OCR エンジンの版（NDLOCR-Lite のみ。取れなければ「不明」）
 
 
 # ---------- 例外クラス ----------
@@ -79,6 +83,27 @@ class OllamaRepeatError(Exception):
     """
 
     pass
+
+
+# ---------- 画像の検証 ----------
+
+
+def validate_image(image_path: Path) -> Path:
+    """画像ファイルの存在と拡張子を検証し、絶対パスを返す
+
+    OCR エンジンによらず同じ規則で検証する（OllamaOCRClient と NdlocrLiteClient で共有）。
+    """
+    path = image_path.resolve()
+
+    if not path.exists():
+        raise ImageFileError(f"ファイルが見つかりません: {image_path}")
+
+    ext = path.suffix.lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+        raise ImageFileError(f"非対応の画像形式です: {ext}\n" f"対応形式: {supported}")
+
+    return path
 
 
 # ---------- 反復の切り落とし ----------
@@ -315,7 +340,7 @@ class OllamaOCRClient:
         Returns:
             OCRResult: 認識結果
         """
-        path = self._validate_image(Path(image_path))
+        path = validate_image(Path(image_path))
         self._check_model_available()
 
         retries = ocr_retry_count()
@@ -357,22 +382,6 @@ class OllamaOCRClient:
         return [m.model for m in models.models]
 
     # ---------- プライベートメソッド ----------
-
-    def _validate_image(self, image_path: Path) -> Path:
-        """画像ファイルの存在と拡張子を検証する"""
-        path = image_path.resolve()
-
-        if not path.exists():
-            raise ImageFileError(f"ファイルが見つかりません: {image_path}")
-
-        ext = path.suffix.lower()
-        if ext not in SUPPORTED_EXTENSIONS:
-            supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
-            raise ImageFileError(
-                f"非対応の画像形式です: {ext}\n" f"対応形式: {supported}"
-            )
-
-        return path
 
     def _check_model_available(self) -> None:
         """指定モデルがOllamaにインストール済みかチェック

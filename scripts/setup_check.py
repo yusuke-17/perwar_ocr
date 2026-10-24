@@ -4,15 +4,19 @@
 確認項目:
   1. Python バージョン
   2. 依存パッケージのインポート
-  3. Ollama サーバーへの接続（バージョンも表示）
-  4. GLM-OCR モデルの存在確認 & 簡易テスト
-  5. Surya OCR の導入有無（任意。未導入でも不合格にしない）
+  3. Ollama サーバーへの接続（バージョンも表示。口語化に使う）
+  4. 選ばれた OCR エンジン（[models] ocr）
+     - NDLOCR-Lite: ソースとモデルの有無・import・版（モデルは読み込まない）
+     - Ollama のモデル（GLM-OCR など）: モデルの存在確認 & 簡易テスト
+  5. 選ばれていない方の OCR エンジンの導入有無（任意。未導入でも不合格にしない）
 
 合否（終了コード）は必須項目（1〜4）だけで決める。
 """
 
-import importlib.util
 import sys
+
+from utils.config import CONFIG
+from utils.ndlocr_client import NDLOCR_ENGINE
 
 # 確認する必須パッケージ（import 名 → パッケージ名）。
 # pyproject.toml の dependencies のうち、コードが実際に import するものにそろえる。
@@ -25,7 +29,17 @@ REQUIRED_PACKAGES = {
     "senzen_word": "senzen-word",             # 旧字体・仮名変換
     "questionary": "questionary",             # 対話メニュー
     "rich": "rich",                           # 進捗表示
+    # 以下は NDLOCR-Lite（vendor/ndlocr-lite）の実行に要る
+    "onnxruntime": "onnxruntime",
+    "PIL": "pillow",
+    "yaml": "pyyaml",
+    "lxml": "lxml",
+    "networkx": "networkx",
+    "tqdm": "tqdm",
 }
+
+# OCR エンジンを Ollama で動かすときの既定のモデル（任意項目の表示に使う）
+_GLM_OCR = "glm-ocr"
 
 
 def check_python_version():
@@ -85,13 +99,17 @@ def _ollama_version_or_unknown() -> str:
         return "不明"
 
 
-def check_glm_ocr(model_names: list[str]):
-    """GLM-OCR モデルがダウンロード済みかチェックし、簡易テストを実行"""
-    # モデル名の確認（glm-ocr:latest や glm-ocr:0.9b などにマッチ）
-    found = [n for n in model_names if "glm-ocr" in n.lower()]
+def _find_model(model_names: list[str], model: str) -> list[str]:
+    """取得済みのモデルのうち、指定の名前に当たるもの（glm-ocr は glm-ocr:latest などにも当たる）"""
+    return [n for n in model_names if model.lower() in n.lower()]
+
+
+def check_glm_ocr(model_names: list[str], model: str = _GLM_OCR):
+    """OCR に使う Ollama のモデル（既定 GLM-OCR）がダウンロード済みかチェックし、簡易テストを実行"""
+    found = _find_model(model_names, model)
     if not found:
-        print("  ✗ GLM-OCR モデルが見つかりません")
-        print("  → ollama pull glm-ocr を実行してください")
+        print(f"  ✗ OCR モデル '{model}' が見つかりません")
+        print(f"  → ollama pull {model} を実行してください")
         return False
 
     model_name = found[0]
@@ -124,33 +142,50 @@ def check_glm_ocr(model_names: list[str]):
         return False
 
 
-def check_surya():
-    """Surya OCR（任意の追加依存）が導入済みかチェック
+def check_ndlocr(required: bool = True) -> bool:
+    """NDLOCR-Lite が使える状態か（ソースとモデルの有無・import）を確かめ、版を表示する
 
-    import はせず有無だけを見る（import すると torch ごと読み込んで数秒かかるため）。
-    未導入でも False を返すだけで、合否には影響しない（main() 側で任意項目として扱う）。
+    モデルの読み込み（数秒かかる）と画像の認識はしない。
+    required=False（選ばれていないエンジン）のときは、導入済みか未導入かを短く表示するだけ。
     """
-    if importlib.util.find_spec("surya") is not None:
-        print("  ✓ surya-ocr 導入済み")
+    from utils.ndlocr_client import NdlocrNotInstalledError, read_ndlocr_version, verify_installation
+
+    try:
+        root = verify_installation()
+    except NdlocrNotInstalledError as e:
+        if required:
+            print(f"  ✗ {e}")
+        else:
+            print("  - 未導入（任意）。使う場合は git submodule update --init --depth 1 を実行してください")
+        return False
+    print(f"  ✓ NDLOCR-Lite 導入済み（{root}）")
+    print(f"    版: {read_ndlocr_version(root)}")
+    return True
+
+
+def check_glm_ocr_installed(model_names: list[str]) -> bool:
+    """GLM-OCR が取得済みかだけを表示する（選ばれていないときの任意項目。簡易テストはしない）"""
+    found = _find_model(model_names, _GLM_OCR)
+    if found:
+        print(f"  ✓ 取得済み: {found[0]}")
         return True
-    print("  - 未導入（任意）。使う場合は uv sync --extra surya を実行してください")
+    print(f"  - 未取得（任意）。使う場合は ollama pull {_GLM_OCR} を実行してください")
     return False
 
 
-# 合否に使う必須項目と、表示だけする任意項目（キー → 表示名）
-REQUIRED_CHECKS = {
-    "python": "Python バージョン",
-    "packages": "依存パッケージ",
-    "ollama": "Ollama 接続",
-    "glm_ocr": "GLM-OCR モデル",
-}
-OPTIONAL_CHECKS = {
-    "surya": "Surya OCR（任意）",
-}
+def _engine_label(engine: str) -> str:
+    return "NDLOCR-Lite" if engine == NDLOCR_ENGINE else f"OCR モデル {engine}"
 
 
 def main():
-    """環境を確認して結果を表示する。必須項目がすべて合格なら 0、それ以外は 1。"""
+    """環境を確認して結果を表示する。必須項目がすべて合格なら 0、それ以外は 1。
+
+    必須項目は選ばれた OCR エンジン（[models] ocr）によって変わる。選ばれていない方は任意項目。
+    """
+    engine = CONFIG.get("models.ocr") or NDLOCR_ENGINE
+    ndlocr_selected = engine == NDLOCR_ENGINE
+    other_engine = _GLM_OCR if ndlocr_selected else NDLOCR_ENGINE
+
     print("=" * 50)
     print("戦前日本語OCR — 環境チェック")
     print("=" * 50)
@@ -167,28 +202,45 @@ def main():
     ollama_ok, model_names = check_ollama_connection()
     results["ollama"] = ollama_ok
 
-    print("\n[4/5] GLM-OCR モデル")
-    if ollama_ok:
-        results["glm_ocr"] = check_glm_ocr(model_names)
+    print(f"\n[4/5] OCR エンジン: {_engine_label(engine)}（選択中）")
+    if ndlocr_selected:
+        results["ocr_engine"] = check_ndlocr()
+    elif ollama_ok:
+        results["ocr_engine"] = check_glm_ocr(model_names, engine)
     else:
         print("  - スキップ（Ollama 未接続）")
-        results["glm_ocr"] = False
+        results["ocr_engine"] = False
 
-    print("\n[5/5] Surya OCR（任意）")
-    results["surya"] = check_surya()
+    print(f"\n[5/5] OCR エンジン: {_engine_label(other_engine)}（任意）")
+    if not ndlocr_selected:
+        results["other_engine"] = check_ndlocr(required=False)
+    elif ollama_ok:
+        results["other_engine"] = check_glm_ocr_installed(model_names)
+    else:
+        print("  - スキップ（Ollama 未接続）")
+        results["other_engine"] = False
+
+    # 合否に使う必須項目と、表示だけする任意項目（キー → 表示名）
+    required_checks = {
+        "python": "Python バージョン",
+        "packages": "依存パッケージ",
+        "ollama": "Ollama 接続",
+        "ocr_engine": _engine_label(engine),
+    }
+    optional_checks = {"other_engine": f"{_engine_label(other_engine)}（任意）"}
 
     # 結果サマリー
     print("\n" + "=" * 50)
     print("結果サマリー")
     print("=" * 50)
     all_ok = True
-    for key, label in REQUIRED_CHECKS.items():
+    for key, label in required_checks.items():
         status = "✓" if results[key] else "✗"
         print(f"  {status} {label}")
         if not results[key]:
             all_ok = False
     # 任意項目は未導入でも ✗ にせず、合否にも数えない
-    for key, label in OPTIONAL_CHECKS.items():
+    for key, label in optional_checks.items():
         status = "✓" if results[key] else "−（未導入）"
         print(f"  {status} {label}")
 

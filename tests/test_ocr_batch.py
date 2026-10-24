@@ -12,6 +12,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
+from PIL import Image
 
 from scripts.ocr_vision_llm import (
     _ocr_pages,
@@ -28,6 +29,7 @@ from utils.library_writer import (
     MetaPageFailure,
     save_document,
 )
+from utils.ndlocr_client import NdlocrLiteClient
 from utils.ollama_client import (
     ImageFileError,
     OllamaConnectionError,
@@ -36,6 +38,7 @@ from utils.ollama_client import (
 )
 
 from fakes import FakeClient as _FakeClient
+from fakes import FakeNdlocrBackend, install_fake_ndlocr
 from fakes import StubModernizer as _StubModernizer
 
 
@@ -310,8 +313,9 @@ def _write_valid_image(path: Path) -> None:
     buf.tofile(str(path))
 
 
-def _preprocess_args() -> argparse.Namespace:
-    return argparse.Namespace(no_preprocess=False, binarize=None)
+def _preprocess_args(model: str = "glm-ocr") -> argparse.Namespace:
+    """前処理が効く引数。前処理は Ollama 経由のエンジン（GLM-OCR）でだけ働くので既定は glm-ocr"""
+    return argparse.Namespace(no_preprocess=False, binarize=None, model=model)
 
 
 def test_preprocess_falls_back_per_page(tmp_path):
@@ -366,6 +370,54 @@ def test_preprocess_all_failed_disables_preprocess(tmp_path):
 
     assert paths is None
     assert meta is None
+
+
+# ---------- NDLOCR-Lite の失敗の分類（ndlocr-lite-engine） ----------
+
+
+def _pngs(folder: Path, n: int) -> list[Path]:
+    """本物の PNG を n 枚作る（NDLOCR-Lite のクライアントは画像を開くため）"""
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for i in range(1, n + 1):
+        path = folder / f"p{i:03d}.png"
+        Image.new("RGB", (40, 60), "white").save(path)
+        paths.append(path)
+    return paths
+
+
+def test_ndlocr_not_installed_aborts_early(tmp_path, capsys):
+    """NDLOCR-Lite を取得していないと、理由「OCRエンジン未導入」で失敗し、連続失敗の打ち切りで残りを待たない"""
+    images = _pngs(tmp_path / "input", 5)
+    backend = FakeNdlocrBackend()
+    client = NdlocrLiteClient(tmp_path / "not-fetched", backend=backend)
+
+    outcome = _ocr_pages(client, images, images, abort_after=3)
+
+    assert outcome.results == []
+    assert [f.reason for f in outcome.failures] == ["model"] * 3
+    assert outcome.aborted is True
+    assert "git submodule update --init --depth 1" in outcome.failures[0].message
+    assert backend.recognized == []
+    out = capsys.readouterr().out
+    assert "OCRエンジン未導入" in out
+    assert "未処理 2枚" in out
+
+
+def test_ndlocr_recognition_error_skips_only_that_page(tmp_path):
+    """2 枚目の認識中にエラーが出ても、その理由と内容を記録してスキップし、1・3 枚目は残る"""
+    images = _pngs(tmp_path / "input", 3)
+    backend = FakeNdlocrBackend(recognize_errors={2: RuntimeError("onnx の推論に失敗")})
+    root = install_fake_ndlocr(tmp_path / "ndlocr")
+    client = NdlocrLiteClient(root, backend=backend, version_reader=lambda _root: "1.3.1")
+
+    outcome = _ocr_pages(client, images, images)
+
+    assert outcome.ok_indices == [0, 2]
+    [failure] = outcome.failures
+    assert (failure.index, failure.reason) == (2, "unknown")
+    assert "onnx の推論に失敗" in failure.message
+    assert outcome.aborted is False
 
 
 # ---------- meta.json への記録 ----------

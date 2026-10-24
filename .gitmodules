@@ -1,0 +1,4 @@
+[submodule "vendor/ndlocr-lite"]
+	path = vendor/ndlocr-lite
+	url = https://github.com/ndl-lab/ndlocr-lite.git
+	shallow = true
