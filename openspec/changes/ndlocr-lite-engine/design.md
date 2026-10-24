@@ -83,6 +83,30 @@
   - 別の仮想環境を自前で作り（clone ＋ `uv venv` ＋ 公式の固定どおり）、subprocess で呼ぶ → 公式の保証どおりだが、環境が 2 つになり
     導入手順も自前で持つことになる。起動ごとにモデルを読むので 1 枚 2.6 秒
   - ソースとモデルをプロジェクトのリポジトリに丸ごとコピーする → 約 157MB のモデルが履歴に残る。版の追跡もしにくい
+  - `git subtree` で取り込む → `--squash` でもモデルはプロジェクトの履歴に入り（今の `.git` 4.3MB → 約 150MB）、
+    モデルが入れ替わる版上げのたびに約 150MB ずつ増える。取り除くには履歴の書き換えが要る
+  - セットアップスクリプトでタグの tarball（約 148MB）を取り、SHA256 を確かめて gitignore した `vendor/` に展開する →
+    git の知識は要らないが、取得と検証のスクリプトを自前で持つことになる。GitHub の tarball はハッシュが変わらない保証が無いため、
+    堅くするなら展開後のファイルごとに確かめる必要があり、さらに手間が増える
+  - フォークして `py-modules` に `pdf_output_utils`・`version` を足し、`uv add git+<フォーク>@<タグ>` で入れる →
+    フォークの保守が要る。`==` 固定は残るので `override-dependencies` も要り、157MB のモデルを含む wheel がビルドされる。
+    壊れる前の 1.2.3 を上流のまま git 依存にする手もあるが、1.3.x のモデルが使えない
+  - submodule の置き場所を `[tool.uv.sources] ndlocr-lite = { path = "vendor/ndlocr-lite", editable = true }` で依存に加える →
+    editable なら `src/` 全体が sys.path に入り起動する（実機で確認）。ただし上流の依存宣言がそのまま効き、
+    GUI 用の `flet` や `reportlab` なども入るうえ、`numpy==2.2.2` との衝突を `override-dependencies = ["numpy>=2.4"]` で上書きする必要がある。
+    必要な 6 つだけを自分で足す本案の方が依存が少なく済む
+- 2026-10-25 時点の上流: 最新タグは 1.3.1 のまま（master との差は CUDA 関連の警告と文書だけ）。`py-modules` の漏れは未修正で、
+  PyPI の公式パッケージも無い。依存の `==` 固定は「今後も積極的に固定する」方針（Issue #34）。モデルの配布はリポジトリ内のみ
+  （Git LFS・Hugging Face の公式配布なし）
+- 取り込み方を見直すきっかけ: 置き場所（`vendor/ndlocr-lite`）と読み込み方（`[ndlocr] path` から `src/` を sys.path に足す）を固定しておけば、
+  取り込み方を替えても `utils/ndlocr_client.py` は変わらない
+
+  | 起きたこと | 対応 | submodule |
+  |---|---|---|
+  | NDLOCR-Lite のコードを直す必要が出た | フォークして直し、`git submodule set-url` で参照先をフォークに替える | 続ける |
+  | 上流のリポジトリが消えた・非公開になった | 控えのフォークを参照先にする | 続ける |
+  | submodule の操作が負担になった | 上のセットアップスクリプト方式に切り替え、同じ `vendor/ndlocr-lite` に展開する | やめる |
+  | subtree にしたくなった | 履歴が重くなるので選ばない | — |
 
 ### D3. 出力の整形は純粋関数 `shape_ndlocr_lines(lines) -> str`
 
