@@ -3,7 +3,7 @@
 戦前日本語OCRツールの作業ログ。会話が長引いて記憶が飛んでも、
 このファイルを読めば「今どこまで出来ていて、次に何をするか」が分かる状態を保つ。
 
-最終更新: 2026-10-25（NDLOCR-Lite への切り替えを実装。レビューとアーカイブ待ち）
+最終更新: 2026-11-02（NDLOCR-Lite への切り替えをマージ・アーカイブ。仕様を本体に統合）
 
 ---
 
@@ -24,11 +24,11 @@ OCRパイプラインの経路を1本化してテストの安全網を張り、�
 
 ---
 
-## 2. 直近の作業（2026-10-25）: OCR エンジンを NDLOCR-Lite に切り替え（ブランチ `ndlocr-lite-engine`、未コミット）
+## 2. 直近の作業（2026-10-25）: OCR エンジンを NDLOCR-Lite に切り替え（PR #1 でマージ、2026-11-02 アーカイブ済み）
 
 **問題**: GLM-OCR は G12 の後も、反復で丸ごと失われるページ（10 枚中 1 枚）と系統的な誤読が残っていた（10/21 の調査で NDLOCR-Lite を選定）。
 
-**やったこと**（`openspec/changes/ndlocr-lite-engine/`、20 タスク完了）
+**やったこと**（`openspec/changes/archive/2026-11-02-ndlocr-lite-engine/`、20 タスク完了）
 
 - NDLOCR-Lite を git submodule（`vendor/ndlocr-lite`、タグ 1.3.1、shallow）で取り込み、ソースのまま `utils/ndlocr_client.py` から呼ぶ。
   取り込み方は subtree・ダウンロード・フォーク等と比べ直したうえで submodule のまま（design.md の D2）
@@ -39,7 +39,7 @@ OCRパイプラインの経路を1本化してテストの安全網を張り、�
 **結果**（`survey/ndlocr-lite-survey.md` の 2026-10-25 追記）: 10 枚の OCR が 136 秒 → **4 秒**、失敗 1 枚 → **0 枚**。
 公式の固定版の CLI と行ごとの文字・信頼度・座標が全ページ一致。
 
-**次の一手**: 変更をレビューしてコミット → `/opsx:archive` で仕様（`ocr-engine` 新規・`ocr-pipeline`・`cli`）を本体に統合。
+**後始末（2026-11-02）**: `/opsx:archive` で仕様を本体に統合（`ocr-engine` 新規 6 要件・`ocr-pipeline` 3 要件を変更・`cli` 2 要件を変更し Surya の要件を削除）。
 
 環境メモ: openspec CLI は mise の Node 26 に 1.14.3 を入れ直した。グローバルの `core.autocrlf=true` で作業ツリーは CRLF。
 
@@ -66,7 +66,7 @@ OCRパイプラインの経路を1本化してテストの安全網を張り、�
 | 2026-10-11 | 一括処理の遅延・失敗の原因調査（glm-ocr の反復ループ）→ G12 起票、G13 を backlog に | `survey/batch-slow-failure-survey.md` |
 | 2026-10-18 | **G12**（反復の切り落とし・`num_predict` 上限・反復失敗の分類・Ollama バージョン表示。10 枚 30 分超 → 5 分） | `openspec/changes/archive/2026-10-18-g12-ocr-repetition-loop/` |
 | 2026-10-21 | OCR エンジンの再選定（NDLOCR-Lite が最適。固定を外しても結果一致、パッケージとしては起動しない）→ 起票 | `survey/ndlocr-lite-survey.md`, `survey/ocr-engine-comparison-2026-10.md` |
-| 2026-10-25 | **NDLOCR-Lite を既定の OCR エンジンに**（submodule・整形・低信頼度の警告・環境確認。Surya 削除。10 枚 136 秒 → 4 秒、失敗 0） | `openspec/changes/ndlocr-lite-engine/` |
+| 2026-10-25 | **NDLOCR-Lite を既定の OCR エンジンに**（submodule・整形・低信頼度の警告・環境確認。Surya 削除。10 枚 136 秒 → 4 秒、失敗 0） | `openspec/changes/archive/2026-11-02-ndlocr-lite-engine/` |
 
 ---
 
@@ -74,8 +74,7 @@ OCRパイプラインの経路を1本化してテストの安全網を張り、�
 
 `plan/improvement-ideas.md` の優先順位に従う。
 
-0. **NDLOCR-Lite への切り替えのレビューとアーカイブ**（実装済み・未コミット） ← 次
-1. **D3 処理ログのファイル保存**（全部 print で揮発している）
+1. **D3 処理ログのファイル保存**（全部 print で揮発している） ← 次
    （口語化の質では、D5 でページ順が正しくなったので **B3 ページ境界の連結 ＋ G11 失敗ページの目印** を1つの変更にまとめるのが効率的）
 2. G13 口語化チャンクの余裕（2,000 字で 4096 トークンの 92%。末尾が無言で欠けるリスク）と
    G9 口語化チャンクのフェイルファスト（G4で顕在化。無応答が続くと 300秒×チャンク数 待つ）は同じファイルなのでまとめてよい
