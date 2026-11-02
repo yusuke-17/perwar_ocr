@@ -28,7 +28,12 @@ from scripts.ocr_vision_llm import (
     process_single,
 )
 from utils.config import _DEFAULTS, Config, _deep_merge
-from utils.library_writer import SCHEMA_VERSION, MetaModernize, MetaPageFailure
+from utils.library_writer import (
+    SCHEMA_VERSION,
+    MetaModernize,
+    MetaPageFailure,
+    extract_title,
+)
 from utils.ndlocr_client import NdlocrLiteClient
 from utils.ollama_client import ImageFileError, OCRResult, OllamaConnectionError, OllamaOCRClient
 from utils.text_normalizer import normalize_text
@@ -298,9 +303,8 @@ def test_batch_all_success(tmp_path):
     assert meta["sources"] == ["source_01.png", "source_02.png", "source_03.png"]
     assert meta["ocr"]["elapsed_seconds"] == 0.3
     assert "pages" not in meta
-    assert _read(doc, "ocr_raw.txt") == (
-        "ページ1の本文\n\nページ2の本文\n\nページ3の本文"
-    )
+    # 句点で終わらないページは、文の途中とみなして改行1つでつながる（B3）
+    assert _read(doc, "ocr_raw.txt") == "ページ1の本文\nページ2の本文\nページ3の本文"
 
 
 def test_batch_middle_failure_saves_rest_in_order(tmp_path):
@@ -317,7 +321,11 @@ def test_batch_middle_failure_saves_rest_in_order(tmp_path):
     assert (doc / "source_01.png").read_bytes() == b"p001.png"
     assert (doc / "source_02.png").read_bytes() == b"p003.png"
     assert not (doc / "source_03.png").exists()
-    assert _read(doc, "ocr_raw.txt") == "ページ1の本文\n\nページ3の本文"
+    # 失敗したページの位置に目印が入り、前後のページは直結しない（G11）
+    assert _read(doc, "ocr_raw.txt") == (
+        "ページ1の本文\n\n〔第2頁 読み取り失敗（p002.png）〕\n\nページ3の本文"
+    )
+    assert "〔第2頁 読み取り失敗（p002.png）〕" in _read(doc, "modern.txt")
 
     pages = _meta(doc)["pages"]
     assert pages["total"] == 3
@@ -340,6 +348,71 @@ def test_batch_all_failure_saves_nothing(tmp_path):
 
     assert code == 1
     assert _docs(tmp_path) == []
+
+
+def test_batch_sentence_end_pages_keep_blank_line(tmp_path):
+    """句点で終わるページの後は空行、文の途中で変わるページは改行1つ（B3）"""
+    images = _images(tmp_path / "input", 3)
+    client = FakeClient(texts=["右及通牒候也。", "第三條ニ依リ當分ノ間", "施行スルコトヲ得。"])
+
+    process_batch(_args(tmp_path), images, client=client, modernizer=EchoModernizer())
+
+    assert _read(_only_doc(tmp_path), "ocr_raw.txt") == (
+        "右及通牒候也。\n\n第三條ニ依リ當分ノ間\n施行スルコトヲ得。"
+    )
+
+
+def test_batch_consecutive_failures_mark_unprocessed_pages(tmp_path):
+    """連続失敗で打ち切ると、処理しなかったページの目印が本文の最後に入る（G11）"""
+    images = _images(tmp_path / "input", 6)
+    client = FakeClient({i: OllamaConnectionError("停止中") for i in (2, 3, 4)})
+
+    code = process_batch(
+        _args(tmp_path), images, client=client, modernizer=EchoModernizer()
+    )
+
+    assert code == 2
+    assert client.calls == 4
+    assert _read(_only_doc(tmp_path), "ocr_raw.txt") == (
+        "ページ1の本文\n\n"
+        "〔第2頁 読み取り失敗（p002.png）〕\n\n"
+        "〔第3頁 読み取り失敗（p003.png）〕\n\n"
+        "〔第4頁 読み取り失敗（p004.png）〕\n\n"
+        "〔第5〜6頁 未処理〕"
+    )
+
+
+def test_batch_first_page_failure_title_skips_marker(tmp_path):
+    """1枚目が失敗すると本文は目印で始まるが、題名には2枚目の見出しが使われる（G11）"""
+    images = _images(tmp_path / "input", 3)
+    client = FakeClient(
+        {1: ImageFileError("画像が壊れています")},
+        texts=["", "陸軍省副官通牒\n本文ノ途中", "續キ。"],
+    )
+
+    process_batch(_args(tmp_path), images, client=client, modernizer=EchoModernizer())
+
+    doc = _only_doc(tmp_path)
+    assert _read(doc, "ocr_raw.txt").startswith("〔第1頁 読み取り失敗（p001.png）〕\n\n")
+    assert _meta(doc)["title"] == "陸軍省副官通牒"
+
+
+def test_extract_title_skips_gap_markers():
+    """題名の取り出しは目印の行を飛ばし、目印しか無ければ空になる"""
+    assert extract_title("〔第1頁 読み取り失敗（a.png）〕\n\n見出シ\n本文") == "見出シ"
+    assert extract_title("〔第1頁 読み取り失敗（a.png）〕\n\n〔第2〜3頁 未処理〕") == ""
+
+
+def test_single_page_text_is_not_changed_by_join(tmp_path):
+    """1枚の処理では、結合による改行や空行が加わらない"""
+    raw = "陸軍省\n本文ノ途中\n"
+    image = _images(tmp_path / "input", 1)[0]
+
+    process_single(
+        _args(tmp_path), image, client=FakeClient(texts=[raw]), modernizer=EchoModernizer()
+    )
+
+    assert _read(_only_doc(tmp_path), "ocr_raw.txt") == raw
 
 
 def test_batch_legacy_output(tmp_path):
@@ -720,7 +793,7 @@ def test_folder_unpadded_numbers_are_combined_in_page_order(tmp_path):
     doc = _only_doc(tmp_path)
     expected = [f"{i}.png" for i in range(1, 13)]
     assert _sources(doc) == [n.encode() for n in expected]
-    assert _read(doc, "ocr_raw.txt").split("\n\n") == [f"本文:{n}" for n in expected]
+    assert _read(doc, "ocr_raw.txt").split("\n") == [f"本文:{n}" for n in expected]
 
 
 def test_folder_unpadded_numbers_legacy_output_name(tmp_path):

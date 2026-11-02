@@ -27,6 +27,7 @@ from utils.ollama_client import (
     list_timeout,
     ollama_errors,
 )
+from utils.page_join import split_by_gap_markers
 from utils.progress import progress_active, track
 
 # ---------- 定数 ----------
@@ -170,8 +171,14 @@ class TextModernizer:
         if not body.strip():
             return ModernizeResult(text=text, chunk_total=0)
 
-        # 本文をチャンクに分割
-        chunks = self._split_text(body)
+        # 本文を読み取れなかったページの目印で区切り、区間ごとにチャンクに分割する。
+        # 目印は LLM に渡さず、目印の前後の本文が同じチャンクに入らないようにする（G11）
+        segments = split_by_gap_markers(body)
+        segment_chunks = [
+            None if is_marker else self._split_text(segment)
+            for is_marker, segment in segments
+        ]
+        chunks = [c for cs in segment_chunks if cs for c in cs]
 
         # 各チャンクをリライト。進捗が有効ならバー表示、無効なら従来 print。
         # （バーと print の二重表示を避けるため有効時は print を抑制）
@@ -207,8 +214,8 @@ class TextModernizer:
                 print(f"    → {time.time() - start:.1f}秒")
             modernized_chunks.append(result)
 
-        # ヘッダーとリライト結果を結合
-        modernized_body = "\n".join(modernized_chunks)
+        # 区間ごとにリライト結果をつなぎ、目印は元の位置にそのまま戻す
+        modernized_body = self._assemble(segments, segment_chunks, modernized_chunks)
 
         if header_lines:
             modernized = header_lines + "\n\n" + modernized_body
@@ -221,6 +228,26 @@ class TextModernizer:
             failures=failures,
             aborted=aborted,
         )
+
+    @staticmethod
+    def _assemble(
+        segments: list[tuple[bool, str]],
+        segment_chunks: list[list[str] | None],
+        modernized_chunks: list[str],
+    ) -> str:
+        """区間ごとのリライト結果と目印を元の並びに組み立てる
+
+        区間の中のチャンクは従来どおり改行1つ、区間と目印の間は空行でつなぐ。
+        目印が無ければ、全チャンクを改行1つでつないだ従来の結果と同じになる。
+        """
+        results = iter(modernized_chunks)
+        parts: list[str] = []
+        for (is_marker, segment), chunks in zip(segments, segment_chunks):
+            if is_marker or chunks is None:
+                parts.append(segment)
+            else:
+                parts.append("\n".join(next(results) for _ in chunks))
+        return "\n\n".join(parts)
 
     def _separate_header(self, text: str) -> tuple[str, str]:
         """ヘッダー行（# で始まる行）と本文を分離する"""
@@ -244,7 +271,8 @@ class TextModernizer:
         長文をチャンク分割する
 
         - chunk_size 以下ならそのまま返す
-        - 句点「。」で文に区切る（従来の挙動）
+        - 句点「。」で文に区切る。「。」は手前の文に残し、原文に無い字は足さない
+          （全チャンクを "".join すると分割前の text と一字も違わない）
         - 1文が chunk_size を超える場合は _split_oversized でさらに分解し、
           どんな入力でも各断片が必ず chunk_size 以下になることを保証する
           （句読点の乏しい戦前文書で全文が1チャンク化し、超過分が
@@ -254,9 +282,10 @@ class TextModernizer:
         if len(text) <= self.chunk_size:
             return [text]
 
-        # 句点で文に分割
-        raw_sentences = text.split("。")
-        sentences = [s + "。" for s in raw_sentences if s.strip()]
+        # 句点で文に分割。「。」は手前の文の末尾に残し、原文に無い「。」は足さない
+        # （「。」で終わらない最後の文に句点を付けていたバグの修正 = B3）。
+        # 空白だけの断片も捨てずに前後と一緒に詰めるので、チャンクをつなぐと原文に戻る
+        sentences = self._split_keep_delims(text, ("。",))
 
         # 上限超えの文をさらに分解し、全断片を chunk_size 以下に揃える
         pieces: list[str] = []
@@ -337,12 +366,20 @@ class TextModernizer:
 
     def _modernize_chunk(self, chunk: str) -> str:
         """1チャンクをOllama APIでリライトする"""
+        return self._chat(self._build_messages(chunk))
+
+    @staticmethod
+    def _build_messages(chunk: str) -> list[dict[str, str]]:
+        """LLM に渡すメッセージ（指示・few-shot の例・チャンク）を組み立てる"""
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         for example in FEW_SHOT_EXAMPLES:
             messages.append({"role": "user", "content": example["input"]})
             messages.append({"role": "assistant", "content": example["output"]})
         messages.append({"role": "user", "content": chunk})
+        return messages
 
+    def _chat(self, messages: list[dict[str, str]]) -> str:
+        """Ollama にメッセージを送り、応答の本文を返す"""
         with ollama_errors(self.model, generate_timeout()):
             response = chat_client().chat(
                 model=self.model,

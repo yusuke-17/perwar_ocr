@@ -62,6 +62,7 @@ from utils.ollama_client import (
     OllamaRepeatError,
     OllamaTimeoutError,
 )
+from utils.page_join import PageEntry, join_pages
 from utils.page_order import (
     ORDER_CHOICES,
     OrderMismatch,
@@ -525,6 +526,27 @@ def _ocr_pages(
     return outcome
 
 
+def _page_entries(
+    image_paths: list[Path], outcome: BatchOcrOutcome
+) -> list[PageEntry]:
+    """全ページを「読み取れた・失敗・未処理」に分けて、結合用の並びにする（B3・G11）
+
+    失敗は outcome.failures、読み取れたページは outcome.ok_indices にある。
+    どちらにも無いページは、連続失敗や中断で処理しなかったページ。
+    """
+    texts = dict(zip(outcome.ok_indices, (r.text for r in outcome.results)))
+    failed = {f.index - 1 for f in outcome.failures}
+    entries = []
+    for i, path in enumerate(image_paths):
+        if i in texts:
+            entries.append(PageEntry(i + 1, path.name, "ok", texts[i]))
+        elif i in failed:
+            entries.append(PageEntry(i + 1, path.name, "failed"))
+        else:
+            entries.append(PageEntry(i + 1, path.name, "unprocessed"))
+    return entries
+
+
 def _print_failure_summary(
     outcome: BatchOcrOutcome, total: int, saved: bool = True
 ) -> None:
@@ -871,8 +893,8 @@ def process_batch(
             _print_failure_summary(outcome, total, saved=False)
             return _exit_code(outcome, None)
 
-        # ── 3. テキスト結合（成功ページのみ・元の順序）──
-        ocr_raw = "\n\n".join(r.text for r in outcome.results)
+        # ── 3. テキスト結合（元の順序。読み取れなかったページには目印）──
+        ocr_raw = join_pages(_page_entries(image_paths, outcome))
         if total > 1:
             print(
                 f"\n結合テキスト: {len(ocr_raw)}文字"

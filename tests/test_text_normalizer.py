@@ -5,7 +5,7 @@ G3「変体仮名変換のパイプライン接続」で追加。
 守られていることを機械的に固定する（位置が動くと静かに壊れるため）。
 """
 
-from utils.text_normalizer import normalize_text
+from utils.text_normalizer import _normalize_body, normalize_text
 
 
 # 変体仮名リテラル（コメントに Unicode 名を併記）
@@ -92,3 +92,39 @@ def test_ocr_misread_correction_still_works():
     assert normalize_text("忽然卜シテ") == "忽然として"
     # 誤読修正が効かないと「卜」が残る
     assert "卜" not in normalize_text("コ卜")
+
+
+# ---------- 読み取れなかったページの目印（G11） ----------
+
+_MARKER = "〔第2頁 読み取り失敗（舊記ヰ号.png）〕"
+
+
+def test_gap_marker_is_kept_as_is():
+    """目印の行は一字も変わらず、前後の本文の旧字体は新字体になる"""
+    text = f"陸軍省ノ當分ノ間\n\n{_MARKER}\n\n舊記ノ續キ"
+    result = normalize_text(text)
+    assert result == f"陸軍省の当分の間\n\n{_MARKER}\n\n旧記の続キ"
+    # 守らずに正規化の規則を当てると、カッコが半角に・「.」が「。」に・旧字体が新字体に変わる
+    assert _normalize_body(_MARKER) == "〔第2頁 読み取り失敗(旧記イ号。png)〕"
+
+
+def test_gap_marker_splits_normalization():
+    """目印の前後は別々に正規化され、"\\n\\n" でつなぎ直される"""
+    a = "陸軍省ノ當分ノ間\n施行スルコトヲ得"
+    b = "依テ右囘答ス\nコ卜"
+    text = f"{a}\n\n{_MARKER}\n\n{b}"
+    assert normalize_text(text) == (
+        f"{normalize_text(a)}\n\n{_MARKER}\n\n{normalize_text(b)}"
+    )
+
+
+def test_unprocessed_marker_at_end_is_kept():
+    text = "第一條 本文ノ途中\n\n〔第8〜10頁 未処理〕"
+    assert normalize_text(text).endswith("\n\n〔第8〜10頁 未処理〕")
+
+
+def test_index_schema_version_is_not_raised():
+    """目印の無い文章の正規化は変わらないので、索引の版は上げない（design D4）"""
+    from utils.library_search import INDEX_SCHEMA_VERSION
+
+    assert INDEX_SCHEMA_VERSION == 2

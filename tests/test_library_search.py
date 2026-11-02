@@ -837,3 +837,29 @@ def test_index_db_is_created_under_dot_index(library):
         assert count == 1
     finally:
         conn.close()
+
+
+# ---------- 読み取れなかったページの目印（G11） ----------
+
+_GAP = "〔第2頁 読み取り失敗（舊記ヰ号.png）〕"
+
+
+def test_gap_marker_is_indexed_as_is(tmp_path):
+    """目印を含む記録を索引に入れると、原文の列に目印が OCR 生テキストと同じ形で残る"""
+    root = tmp_path / "library"
+    root.mkdir()
+    make_doc(
+        root,
+        "2026-01-01_gap",
+        ocr_raw=f"陸軍省ノ當分ノ間\n\n{_GAP}\n\n舊記ノ續キ",
+        modern=f"陸軍省の当面の間\n\n{_GAP}\n\n旧記の続き",
+    )
+    idx = LibraryIndex(root)
+    idx.update()
+
+    original = _fetch_original(idx, "2026-01-01_gap")
+    assert _GAP in original.split("\n")
+    assert "当分" in original
+
+    hits = idx.search("読み取り失敗")
+    assert [h.id for h in hits] == ["2026-01-01_gap"]
