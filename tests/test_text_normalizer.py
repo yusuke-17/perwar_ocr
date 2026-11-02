@@ -5,6 +5,8 @@ G3「変体仮名変換のパイプライン接続」で追加。
 守られていることを機械的に固定する（位置が動くと静かに壊れるため）。
 """
 
+import pytest
+
 from utils.text_normalizer import _normalize_body, normalize_text
 
 
@@ -124,7 +126,27 @@ def test_unprocessed_marker_at_end_is_kept():
 
 
 def test_index_schema_version_is_not_raised():
-    """目印の無い文章の正規化は変わらないので、索引の版は上げない（design D4）"""
+    """目印の無い文章の正規化は変わらないので、ページ境界の変更では索引の版を上げなかった（design D4）
+
+    その後 G10（旧字体変換表の穴埋め）で正規化の結果が変わったため 3 に上げた。
+    """
     from utils.library_search import INDEX_SCHEMA_VERSION
 
-    assert INDEX_SCHEMA_VERSION == 2
+    assert INDEX_SCHEMA_VERSION == 3
+
+
+# ---------- G10: 字形違いの旧字・俗字・人名用異体字 ----------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("敎育ニ關スル勅語", "教育に関スル勅語"),
+        ("內務省", "内務省"),
+        ("會議ノ塲所", "会議の場所"),
+        ("長嵜縣", "長嵜県"),  # 人名・地名用の異体字は残し、縣だけ新字体に
+    ],
+)
+def test_glyph_old_forms_normalized(raw, expected):
+    """常用漢字表に括弧書きされない旧字・俗字も新字体になり、人名用の異体字は残る"""
+    assert normalize_text(raw) == expected

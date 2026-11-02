@@ -39,7 +39,7 @@ TRIGRAM_MIN_QUERY_CHARS = CONFIG.get("search.min_query_chars")  # FTS5 trigram �
 # normalize_text() の変換規則を変えたときも必ずこの値を上げること。
 # 索引には normalize_text() を通した結果が入っているため、規則だけ変えると
 # 古い規則で作られた索引が残り、新しい規則のクエリと噛み合わなくなる。
-INDEX_SCHEMA_VERSION = 2
+INDEX_SCHEMA_VERSION = 3
 
 # 索引の入力となるファイル（差分更新の変更検知はこの3つを見る）
 _SOURCE_FILES = ("meta.json", "modern.txt", "ocr_raw.txt")
