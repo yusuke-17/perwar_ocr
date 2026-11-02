@@ -37,6 +37,8 @@ from senzen_word.kana import (
     convert_katakana_particles,
 )
 
+from utils.page_join import split_by_gap_markers
+
 
 # ---------- OCR誤読 修正辞書 ----------
 # GLM-OCRが戦前文書で誤読しやすい文字パターン
@@ -160,6 +162,8 @@ def normalize_text(text: str) -> str:
       8. 句読点・空白の正規化
 
     ヘッダー行（# で始まる行）はスキップする。
+    読み取れなかったページの目印の行（utils/page_join.py）は一字も変えず、
+    目印の前後の本文を別々に正規化する（目印をまたいで規則を当てない）。
 
     変体仮名変換の位置には2つの制約がある（動かすと静かに壊れる）:
       - 歴史的仮名遣い変換より「前」。変体仮名が生む「かう」を「こう」にする
@@ -179,6 +183,25 @@ def normalize_text(text: str) -> str:
     if not body.strip():
         return text
 
+    # 読み取れなかったページの目印の行は変えず、目印の前後の本文を別々に正規化する。
+    # 目印が無ければ区間は本文全体の1つで、従来とまったく同じ経路を通る
+    parts = split_by_gap_markers(body)
+    if len(parts) == 1 and not parts[0][0]:
+        body = _normalize_body(body)
+    else:
+        normalized = (
+            segment if is_marker else _normalize_body(segment)
+            for is_marker, segment in parts
+        )
+        body = "\n\n".join(s for s in normalized if s.strip())
+
+    if header:
+        return header + "\n\n" + body
+    return body
+
+
+def _normalize_body(body: str) -> str:
+    """本文（ヘッダーと目印を除いた区間）に正規化の8段階をかける"""
     # ① Unicode正規化
     body = _normalize_unicode(body)
     # ② 旧字体→新字体（senzen_word）
@@ -197,9 +220,6 @@ def normalize_text(text: str) -> str:
     # ⑧ 句読点・空白
     body = _normalize_punctuation(body)
     body = _normalize_whitespace(body)
-
-    if header:
-        return header + "\n\n" + body
     return body
 
 

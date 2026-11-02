@@ -29,6 +29,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from utils.config import CONFIG
+from utils.page_join import is_gap_marker
 
 # ---------- 定数 ----------
 
@@ -162,12 +163,13 @@ def extract_title(ocr_raw: str, max_chars: int = 40) -> str:
     """OCR生テキストの先頭非空行をタイトルとして抽出する
 
     - 改行・前後空白を trim
+    - 読み取れなかったページの目印の行は飛ばす（1枚目が失敗した記録の題名が目印にならないように）
     - max_chars を超えたら切り詰める
-    - 全行が空なら空文字を返す
+    - 全行が空（または目印だけ）なら空文字を返す
     """
     for line in ocr_raw.splitlines():
         stripped = line.strip()
-        if stripped:
+        if stripped and not is_gap_marker(stripped):
             return stripped[:max_chars]
     return ""
 

@@ -124,3 +124,27 @@ def test_run_two_stage_end_to_end(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "段階1" in out
     assert "段階2" in out
+
+
+def test_gap_marker_is_unchanged_in_normalize_stage(tmp_path, capsys):
+    """目印の行は段階1（OCR生 → 正規化）で変わらず、正規化後の本文に同じ形で現れる（G11）"""
+    gap = "〔第2頁 読み取り失敗（舊記ヰ号.png）〕"
+    raw = f"陸軍省ノ當分ノ間\n\n{gap}\n\n舊記ノ續キ"
+    normalized = diff_viewer.normalize_text(raw)
+    assert gap in normalized.split("\n")
+    changed = [s for s in compute_segments(raw, normalized) if s.kind != "equal"]
+    assert changed and all("〔" not in s.before + s.after for s in changed)
+
+    doc = tmp_path / "2026-01-01_gap"
+    doc.mkdir()
+    (doc / "ocr_raw.txt").write_text(raw, encoding="utf-8")
+    (doc / "modern.txt").write_text(f"陸軍省の当面の間\n\n{gap}\n\n旧記の続き", encoding="utf-8")
+    args = argparse.Namespace(
+        target="2026-01-01_gap",
+        library_root=str(tmp_path),
+        stage="1",
+        no_color=True,
+        context=1000,
+    )
+    assert diff_viewer.run(args) == 0
+    assert gap in capsys.readouterr().out
