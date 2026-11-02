@@ -790,10 +790,13 @@ def test_no_rebuild_when_version_matches(library, capsys):
 
 
 def test_schema_version_unchanged_by_query_expression_change(library):
-    """クエリ構文の拡張は索引に触れないので版は据え置き（作り直しを起こさない）"""
+    """クエリ構文の拡張は索引に触れないので版は据え置き（作り直しを起こさない）
+
+    その後 G10（旧字体変換表の穴埋め）で正規化の結果が変わったため 3 に上げた。
+    """
     from utils.library_search import INDEX_SCHEMA_VERSION
 
-    assert INDEX_SCHEMA_VERSION == 2
+    assert INDEX_SCHEMA_VERSION == 3
 
 
 def test_existing_index_serves_new_query_syntax_without_rebuild(multi_library, capsys):
@@ -863,3 +866,51 @@ def test_gap_marker_is_indexed_as_is(tmp_path):
 
     hits = idx.search("読み取り失敗")
     assert [h.id for h in hits] == ["2026-01-01_gap"]
+
+
+# ---------- G10: 字形違いの旧字で書かれた原文 ----------
+
+
+@pytest.fixture
+def glyph_library(tmp_path):
+    """常用漢字表に括弧書きされない旧字（敎・內）で書かれた原文の文書1件"""
+    root = tmp_path / "library"
+    root.mkdir()
+    make_doc(
+        root,
+        "2026-01-04_kyoiku",
+        title="敎育ニ關スル勅語",
+        modern="教育に関する勅語について内務省が通達した。",
+        ocr_raw="敎育勅語ニ關シ內務省ヨリ通牒アリ",
+    )
+    return root
+
+
+@pytest.mark.parametrize("query", ["教育勅語", "内務省"])
+def test_glyph_old_form_original_found_by_modern_query(glyph_library, query):
+    """原文が字形違いの旧字でも、現代表記の検索語で原文の列に当たる"""
+    idx = LibraryIndex(glyph_library)
+    idx.update()
+    hits = idx.search(f"原文:{query}")
+    assert [h.id for h in hits] == ["2026-01-04_kyoiku"]
+
+
+def test_index_built_by_old_rules_is_rebuilt(glyph_library, capsys):
+    """敎 を変換しない古い規則（版 2）の索引が残っていても、作り直されて見つかる"""
+    idx = LibraryIndex(glyph_library)
+    idx.update()
+
+    # 古い規則で作った索引を再現: 原文の列に旧字が残り、版が 2
+    conn = sqlite3.connect(idx.db_path)
+    try:
+        conn.execute("UPDATE search SET original = ?", ("敎育勅語に関シ內務省より通牒アリ",))
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+    finally:
+        conn.close()
+    capsys.readouterr()
+
+    hits = idx.search("原文:教育勅語")
+
+    assert [h.id for h in hits] == ["2026-01-04_kyoiku"]
+    assert "再構築" in capsys.readouterr().out

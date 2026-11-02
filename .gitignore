@@ -36,3 +36,6 @@ library/*
 .vscode/
 .idea/
 *.swp
+
+# senzen_word の監査ツールが取得する Unihan のキャッシュ
+pkg/senzen_word/tools/.cache/

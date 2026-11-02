@@ -6,8 +6,14 @@ str.translate() を使ったC言語レベルの高速変換。
 
 データソース:
   - joyo_old_new.json: 常用漢字の旧字体→新字体（文化庁常用漢字表準拠）
+  - glyph_old_new.json: 常用漢字表に括弧書きされない字形違いの旧字（敎→教、內→内 等）
+  - zokuji.json: 戦前の文書に現れる俗字・略字（塲→場、甞→嘗 等）
   - jinmei.json: 人名用漢字の旧字体→新字体
-  - variants.json: 異体字（髙→高 等）
+  - variants.json: 異体字（卻→却、羣→群、髙→高 等）
+
+どのファイルにも同じキーは置かない（テストで検査する）ので、読み込み順は結果に影響しない。
+変換しないと判断した字は tools/kanji_keep.json に理由とともに記録し、
+tools/audit_kanji_table.py で判断の漏れを洗い出す。
 """
 
 from __future__ import annotations
@@ -49,6 +55,10 @@ def _load_all_tables() -> dict[str, str]:
 
     # 常用漢字（メインテーブル）
     merged.update(_load_json("joyo_old_new.json"))
+    # 常用漢字表に括弧書きされない字形違いの旧字
+    merged.update(_load_json("glyph_old_new.json"))
+    # 俗字・略字
+    merged.update(_load_json("zokuji.json"))
     # 人名用漢字
     merged.update(_load_json("jinmei.json"))
     # 異体字（最後に上書きで優先）
