@@ -45,6 +45,11 @@ _DEFAULTS: dict[str, Any] = {
         #   "keep_original": 原文のまま採用して続行（既定。文字を欠けさせない）
         #   "abort":         例外を投げて変換全体を中止（従来の挙動）
         "on_error": "keep_original",
+        # 口語化の結果に few-shot のお手本が混入したとき、お手本を外して 1 回変換し直すか（G14）。
+        # 話題がお手本と重なる資料では、お手本つきのままだと何度やっても混入する。
+        # お手本なしの結果は判定せずに採用する（お手本を渡さなければ混入は起きない）。
+        # false ならそのチャンクは失敗扱い（原文のまま）
+        "retry_without_examples": True,
     },
     # 口語体変換(chat)の生成パラメータ。セクション丸ごと ollama の options= に渡る。
     "llm": {"temperature": 0.5, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.1},

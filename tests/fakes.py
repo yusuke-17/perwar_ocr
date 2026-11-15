@@ -13,7 +13,7 @@ from pathlib import Path
 
 from utils.ndlocr_client import REQUIRED_FILES
 from utils.ollama_client import OCRResult
-from utils.text_modernizer import ModernizeResult
+from utils.text_modernizer import ModernizeResult, TextModernizer
 
 
 class FakeClient:
@@ -115,6 +115,33 @@ class EchoModernizer:
     def modernize_detailed(self, text: str) -> ModernizeResult:
         self.calls += 1
         return ModernizeResult(text=f"{MODERN_MARK}{text}", chunk_total=1)
+
+
+class ScriptedChatModernizer(TextModernizer):
+    """本物の TextModernizer の LLM への送信（_chat）だけを差し替えたフェイク
+
+    replies を順に返す（尽きたら最後の応答を繰り返す）。送ったメッセージは sent に残る。
+    チャンク分割・お手本の混入の判定と再試行（G14）・失敗の吸収は本物の処理を通る。
+    """
+
+    model = "fake-llm"
+
+    def __init__(self, replies: list[str], **kwargs):
+        super().__init__(model=self.model, **kwargs)
+        self.replies = replies
+        self.sent: list[list[dict[str, str]]] = []
+
+    @property
+    def calls(self) -> int:
+        return len(self.sent)
+
+    def _check_model_available(self) -> None:
+        """モデル存在確認はテストでは不要なので無効化する"""
+
+    def _chat(self, messages):
+        reply = self.replies[min(self.calls, len(self.replies) - 1)]
+        self.sent.append(messages)
+        return reply
 
 
 # ---------- NDLOCR-Lite ----------

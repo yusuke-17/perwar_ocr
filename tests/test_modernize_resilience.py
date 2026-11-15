@@ -6,8 +6,10 @@ LLM呼び出し部（_modernize_chunk）だけを差し替えたサブクラス�
 Ollama もモックライブラリも不要。
 """
 
+import pytest
+
 from utils.ollama_client import OllamaTimeoutError
-from utils.text_modernizer import ModernizeResult, TextModernizer
+from utils.text_modernizer import FewShotLeakError, ModernizeResult, TextModernizer
 
 
 class _StubModernizer(TextModernizer):
@@ -169,3 +171,77 @@ def test_empty_body_returns_as_is():
     assert result.failures == []
     assert result.aborted is False
     assert m.calls == 0
+
+
+# ---------- お手本の混入が続くチャンク（G14） ----------
+
+_S1 = "第一條 陸軍省ハ左記ノ通リ通牒ス。"
+_S2 = "第二條 當分ノ間從前ノ例ニ依ル。"
+_S3 = "第三條 本令ハ公布ノ日ヨリ施行ス。"
+_LEAK = "思うに、皇室の祖先が国を開いたのは遥か昔のことだった。"
+
+
+class _LeakingModernizer(TextModernizer):
+    """_chat を差し替え、leak_in を含むチャンクにだけお手本の混入を返す
+
+    お手本の有無にかかわらず同じ応答を返す。
+
+    interrupt_on_call: その回数目の呼び出しで KeyboardInterrupt を投げる
+    """
+
+    def __init__(self, leak_in: str, interrupt_on_call: int = 0, **kwargs):
+        super().__init__(**kwargs)
+        self.leak_in = leak_in
+        self.interrupt_on_call = interrupt_on_call
+        self.calls = 0
+
+    def _check_model_available(self) -> None:
+        """モデル存在確認はテストでは不要なので無効化する"""
+
+    def _chat(self, messages):
+        self.calls += 1
+        if self.calls == self.interrupt_on_call:
+            raise KeyboardInterrupt
+        chunk = messages[-1]["content"]
+        if self.leak_in in chunk:
+            return _LEAK + "[変換済み]" + chunk
+        return "[変換済み]" + chunk
+
+
+def test_leak_without_retry_keeps_original_chunk():
+    """お手本なしで変換し直さない設定では、混入した断片は旧字体・カタカナの原文のまま残り、ほかは変換される"""
+    m = _LeakingModernizer(leak_in="第二條", chunk_size=20, retry_without_examples=False)
+
+    result = m.modernize_detailed(_S1 + _S2 + _S3)
+
+    assert result.chunk_total == 3
+    assert result.text == f"[変換済み]{_S1}\n{_S2}\n[変換済み]{_S3}"
+    assert "皇室の祖先" not in result.text
+    assert [f.index for f in result.failures] == [2]
+    assert "お手本の例文が混入" in result.failures[0].message
+    assert m.calls == 3
+
+
+def test_leak_without_retry_and_abort_raises():
+    """on_chunk_error='abort' なら混入を見つけた時点で FewShotLeakError が伝わる"""
+    m = _LeakingModernizer(
+        leak_in="第二條",
+        chunk_size=20,
+        retry_without_examples=False,
+        on_chunk_error="abort",
+    )
+
+    with pytest.raises(FewShotLeakError):
+        m.modernize_detailed(_S1 + _S2 + _S3)
+
+
+def test_keyboard_interrupt_during_retry_keeps_rest():
+    """お手本なしの変換し直しの途中の Ctrl+C は既存の中断処理に届き、残りは原文のまま残る"""
+    # 1 回目: 第一條、2 回目: 第二條（混入）、3 回目: 第二條のお手本なしの変換で中断
+    m = _LeakingModernizer(leak_in="第二條", interrupt_on_call=3, chunk_size=20)
+
+    result = m.modernize_detailed(_S1 + _S2 + _S3)
+
+    assert result.aborted is True
+    assert result.text == f"[変換済み]{_S1}\n{_S2}\n{_S3}"
+    assert result.failures == []
