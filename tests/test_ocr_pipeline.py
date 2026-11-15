@@ -44,6 +44,7 @@ from fakes import (
     FakeClient,
     FakeNdlocrBackend,
     NameEchoClient,
+    ScriptedChatModernizer,
     StubModernizer,
     install_fake_ndlocr,
     ndlocr_column,
@@ -230,6 +231,47 @@ def test_single_modernize_failure_keeps_normalized_text(tmp_path):
     doc = _only_doc(tmp_path)
     assert _read(doc, "modern.txt") == normalize_text(OLD_TEXT)
     assert "LLM停止中" in _meta(doc)["modernize"]["error"]
+
+
+# お手本（教育勅語の例）を訳し直した文。原文の OLD_TEXT に「皇祖」「祖宗」などは無い
+_LEAKED = "思うに、皇室の祖先が国を開いたのは遥か昔のことだった。関東地方の状況"
+
+
+def test_single_leak_without_retry_counts_as_failed_chunk(tmp_path):
+    """お手本なしで変換し直さない設定では、混入したチャンクは原文のまま残り、meta.json の failed_chunks に数える（G14）"""
+    [image] = _images(tmp_path / "input", 1)
+
+    process_single(
+        _args(tmp_path),
+        image,
+        client=FakeClient(texts=[OLD_TEXT]),
+        modernizer=ScriptedChatModernizer([_LEAKED], retry_without_examples=False),
+    )
+
+    doc = _only_doc(tmp_path)
+    assert _read(doc, "modern.txt") == normalize_text(OLD_TEXT)
+    assert _meta(doc)["modernize"]["failed_chunks"] == 1
+    assert _meta(doc)["modernize"]["chunk_total"] == 1
+
+
+def test_single_leak_fixed_by_retry_adds_no_meta_keys(tmp_path):
+    """再試行で混入が消えたら、meta.json の modernize は混入が無いときと同じ形（G14）"""
+    clean_root = tmp_path / "clean"
+    leak_root = tmp_path / "leak"
+    for root, replies in ((clean_root, ["関東地方の状況"]), (leak_root, [_LEAKED, "関東地方の状況"])):
+        [image] = _images(root / "input", 1)
+        code = process_single(
+            _args(root),
+            image,
+            client=FakeClient(texts=[OLD_TEXT]),
+            modernizer=ScriptedChatModernizer(replies),
+        )
+        assert code == 0
+
+    clean, leak = _only_doc(clean_root), _only_doc(leak_root)
+    assert _read(leak, "modern.txt") == "関東地方の状況"
+    assert _meta(leak)["modernize"] == _meta(clean)["modernize"]
+    assert "failed_chunks" not in _meta(leak)["modernize"]
 
 
 def test_single_legacy_output(tmp_path):

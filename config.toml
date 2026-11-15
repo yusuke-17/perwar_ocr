@@ -17,6 +17,8 @@ modernize = "qwen3.5:9b" # 口語体変換に使うモデル
 #
 # [chunk]
 # size = 2000            # 口語体変換の1チャンクの文字数
+# on_error = "keep_original"  # チャンクの変換に失敗したとき: 原文のまま続行 / "abort" で全体を中止
+# retry_without_examples = true  # 結果に few-shot のお手本が混入したら、お手本なしで変換し直す。false なら原文のまま残す
 #
 # [llm]                   # 口語体変換の生成パラメータ（そのままOllamaのoptionsに渡る）
 # temperature = 0.5      # 創造性（低いほど原文に忠実）

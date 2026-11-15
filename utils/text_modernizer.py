@@ -42,6 +42,9 @@ DEFAULT_CHUNK_SIZE = CONFIG.get("chunk.size")  # 文字数
 #   "abort":         例外を送出して変換全体を中止する（従来の挙動）
 DEFAULT_ON_CHUNK_ERROR = CONFIG.get("chunk.on_error", "keep_original")
 
+# 結果に few-shot のお手本が混入したとき、お手本なしで変換し直すか（G14）
+DEFAULT_RETRY_WITHOUT_EXAMPLES = CONFIG.get("chunk.retry_without_examples", True)
+
 SYSTEM_PROMPT = """\
 あなたは戦前の日本語を現代の読みやすい日本語に書き直す専門家です。
 
@@ -56,24 +59,95 @@ SYSTEM_PROMPT = """\
 - 原文の意味を変えない。推測で情報を足さない
 - 出力は変換後の文章のみ"""
 
+
+@dataclass(frozen=True)
+class LeakMarker:
+    """お手本の混入を見分ける目印の組（G14）
+
+    LLM がお手本まで本文と取り違えると、お手本の入力を訳し直した文が
+    結果に混ざる（一字一句同じではないので、完全一致では見つからない）。
+    そこで「原文に無いのに、お手本由来の語が出た」ことで混入とみなす。
+
+    output_terms: 変換結果に**すべて**含まれたら、お手本を訳し直した疑いがある
+    source_terms: 原文に**どれか 1 つでも**あれば本物の引用とみなし、混入としない
+    """
+
+    output_terms: tuple[str, ...]
+    source_terms: tuple[str, ...]
+
+
 # Few-shot例（小さいモデルの指示追従を向上させるため）
 # 出典: 大日本帝国憲法・教育勅語・歴史叙述文（いずれも公知の歴史的文書）
+# leak_markers はお手本の混入を見分ける目印（G14）。プロンプトには使わない。
+# お手本の文面を変えたら目印も見直すこと（付け忘れはテストで落ちる）。
 FEW_SHOT_EXAMPLES = [
     {
         "input": "日本臣民ハ法律ノ定ムル所ニ従ヒ納税ノ義務ヲ有ス。",
         "output": "日本の国民は、法律の定めに従って税金を納める義務がある。",
+        # 固有名詞が無いので、弱い言い回し 2 つがそろったときだけ混入とみなす。
+        # 片方だけだと租税を扱う公文書の正しい訳を誤判定してしまう。
+        # 原文に「税」が 1 字でもあれば（租税・納税・稅 など）本物の訳とみなす
+        "leak_markers": [
+            LeakMarker(
+                output_terms=("日本の国民は", "税金を納める義務"),
+                source_terms=("臣民", "税", "稅"),
+            ),
+        ],
     },
     {
         "input": "其ノ流祖ハ常陸國ノ人ニシテ、始メ心影流ヲ學ビ、後ニ自ラ一流ヲ開キタリ。"
         "其ノ技倆甚ダ優レタリト雖モ、未ダ以テ足レリトセザリキ。",
         "output": "その流派の創始者は常陸国の出身で、はじめは心影流を学んだが、のちに独自の流派を立ち上げた。"
         "腕前はとても優れていたが、それでもまだ満足しなかった。",
+        "leak_markers": [
+            LeakMarker(output_terms=("常陸",), source_terms=("常陸",)),
+            LeakMarker(output_terms=("心影流",), source_terms=("心影流",)),
+        ],
     },
     {
         "input": "朕惟フニ我ガ皇祖皇宗國ヲ肇ムルコト宏遠ニ德ヲ樹ツルコト深厚ナリ。",
         "output": "思うに、皇室の祖先が国を開いたのは遥か昔のことで、その徳はとても深く厚いものだった。",
+        "leak_markers": [
+            # 「皇室の祖先」は皇宗・祖宗・列聖などの訳にもなるので、どれかがあれば本物の訳とみなす
+            LeakMarker(
+                output_terms=("皇室の祖先",),
+                source_terms=("皇祖", "皇宗", "祖宗", "列聖", "皇考"),
+            ),
+        ],
     },
 ]
+
+
+def find_few_shot_leak(source: str, result: str) -> LeakMarker | None:
+    """変換結果にお手本が混入していれば、判定に使った目印の組を返す（G14）
+
+    どれかの組で「出力側の語がすべて結果にあり、原文側の語が 1 つも原文に無い」とき混入。
+    原文が憲法や勅語を実際に引用している場合は原文側の語があるので見逃す。
+
+    Args:
+        source: LLM に渡したチャンクの原文
+        result: そのチャンクの変換結果
+
+    Returns:
+        混入と判定した目印の組。混入が無ければ None
+    """
+    for example in FEW_SHOT_EXAMPLES:
+        for marker in example["leak_markers"]:
+            if all(t in result for t in marker.output_terms) and not any(
+                t in source for t in marker.source_terms
+            ):
+                return marker
+    return None
+
+
+# ---------- 例外 ----------
+
+
+class FewShotLeakError(Exception):
+    """お手本の混入を見つけ、お手本なしで変換し直さない設定のときの例外（G14）
+
+    modernize_detailed がほかの失敗と同じく受け止め、そのチャンクを原文のまま残す。
+    """
 
 
 # ---------- 結果の型 ----------
@@ -122,10 +196,12 @@ class TextModernizer:
         model: str = DEFAULT_TEXT_MODEL,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         on_chunk_error: str = DEFAULT_ON_CHUNK_ERROR,
+        retry_without_examples: bool = DEFAULT_RETRY_WITHOUT_EXAMPLES,
     ):
         self.model = model
         self.chunk_size = chunk_size
         self.on_chunk_error = on_chunk_error
+        self.retry_without_examples = bool(retry_without_examples)
 
     def modernize(self, text: str) -> str:
         """
@@ -365,14 +441,34 @@ class TextModernizer:
         return pieces
 
     def _modernize_chunk(self, chunk: str) -> str:
-        """1チャンクをOllama APIでリライトする"""
-        return self._chat(self._build_messages(chunk))
+        """1チャンクをOllama APIでリライトする
+
+        まずお手本つきで変換する。結果に few-shot のお手本が混入していたら、
+        お手本を外して 1 回だけ変換し直し、その結果を判定せずに採用する（G14）。
+        - 話題がお手本と重なる資料では、お手本つきのままだと何度やっても混入する
+        - お手本を渡さなければ混入は起きようがない。そこで判定に掛かるのは誤判定
+          （引用がチャンクの境目で切れた場合など）だけなので、正しい訳を捨てない
+        retry_without_examples が False なら FewShotLeakError を投げ、呼び出し元の
+        失敗処理（原文のまま残す / abort なら中止）に任せる。
+        """
+        result = self._chat(self._build_messages(chunk))
+        marker = find_few_shot_leak(chunk, result)
+        if marker is None:
+            return result
+        terms = "・".join(marker.output_terms)
+        if not self.retry_without_examples:
+            raise FewShotLeakError(f"お手本の例文が混入しました（{terms}）")
+        print(f"    ⚠ お手本の例文の混入を検出（{terms}）。お手本なしで変換し直します")
+        return self._chat(self._build_messages(chunk, with_examples=False))
 
     @staticmethod
-    def _build_messages(chunk: str) -> list[dict[str, str]]:
-        """LLM に渡すメッセージ（指示・few-shot の例・チャンク）を組み立てる"""
+    def _build_messages(chunk: str, with_examples: bool = True) -> list[dict[str, str]]:
+        """LLM に渡すメッセージ（指示・few-shot の例・チャンク）を組み立てる
+
+        with_examples=False ならお手本を入れない（お手本が混入したときの変換し直し用。G14）
+        """
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        for example in FEW_SHOT_EXAMPLES:
+        for example in FEW_SHOT_EXAMPLES if with_examples else ():
             messages.append({"role": "user", "content": example["input"]})
             messages.append({"role": "assistant", "content": example["output"]})
         messages.append({"role": "user", "content": chunk})
