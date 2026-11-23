@@ -128,7 +128,7 @@ Ollama 0.40.17。`TextModernizer._build_messages` と同じメッセージで、
   合計が指定の 2,600 でなく 2,816 なのは、llama.cpp がコンテキスト長を 256 の倍数に切り上げるため
 - 4096 と 8192 で 1 トークンあたりの速さは変わらない。1 回目は読み込みを含むので比べていない。`ollama ps` のメモリは 1.4GB → 1.7GB
 - 同じチャンクでも出力は 1,235〜1,531 トークンと揺れる（temperature 0.5）。4096 では最大 88% に達した
-- → G13 で口語化だけ `[llm] num_ctx = 8192` を既定にし、`done_reason=length` を検知してチャンクを半分に分けて変換し直すようにした（`openspec/changes/g13-g9-chunk-safety/`）
+- → G13 で口語化だけ `[llm] num_ctx = 8192` を既定にし、`done_reason=length` を検知してチャンクを半分に分けて変換し直すようにした（`openspec/changes/archive/2026-11-23-g13-g9-chunk-safety/`）
 - ただし 8192 では、訳に使える残り（約 6,100 トークン）を出し切るのに約 340 秒かかり、時間切れ（300 秒）の方が先に来る。LLM が同じ文を繰り返し続ける暴走では `length` に届かないので、`[llm] num_predict = 3072` も既定にした（最長でも約 170 秒）。`num_predict` を 200 にして同じチャンクを送ると 23.4 秒で `length` になり、訳は途中で途切れた（上限は `num_ctx` でも `num_predict` でも同じく `length` で止まる）
 - Ollama が更新されて挙動が怪しいときは、同じ条件（`num_ctx` を入力より少し大きくする）で `done_reason` が `length` になるかを確かめる。
   `stop` のまま出力が長く続くなら context shift が起きており、溢れを検知できていない
