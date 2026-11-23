@@ -35,7 +35,13 @@ from utils.library_writer import (
     extract_title,
 )
 from utils.ndlocr_client import NdlocrLiteClient
-from utils.ollama_client import ImageFileError, OCRResult, OllamaConnectionError, OllamaOCRClient
+from utils.ollama_client import (
+    ImageFileError,
+    OCRResult,
+    OllamaConnectionError,
+    OllamaOCRClient,
+    OllamaTimeoutError,
+)
 from utils.text_normalizer import normalize_text
 
 from fakes import (
@@ -272,6 +278,42 @@ def test_single_leak_fixed_by_retry_adds_no_meta_keys(tmp_path):
     assert _read(leak, "modern.txt") == "関東地方の状況"
     assert _meta(leak)["modernize"] == _meta(clean)["modernize"]
     assert "failed_chunks" not in _meta(leak)["modernize"]
+
+
+# 1 条が 1 チャンク（20 字以下）になる架空のカタカナ文語の 5 か条
+_FIVE_ARTICLES = "".join(
+    f"第{n}條 本令ハ陸軍ノ兵器ニ之ヲ適用ス。" for n in "一二三四五"
+)
+
+
+def test_consecutive_modernize_failures_abort_and_count_rest(tmp_path):
+    """口語化が続けて 3 回時間切れになったら残りを送らずに打ち切り、未処理も failed_chunks に数える（G9）
+
+    meta.json には新しいキーを足さず（error も付けない）、終了コードは 2。
+    """
+    [image] = _images(tmp_path / "input", 1)
+    modernizer = ScriptedChatModernizer(
+        [OllamaTimeoutError("300 秒以内に応答しませんでした")],
+        chunk_size=20,
+        abort_after_consecutive_failures=3,
+    )
+
+    code = process_single(
+        _args(tmp_path),
+        image,
+        client=FakeClient(texts=[_FIVE_ARTICLES]),
+        modernizer=modernizer,
+    )
+
+    assert code == 2
+    assert modernizer.calls == 3
+    doc = _only_doc(tmp_path)
+    modernize = _meta(doc)["modernize"]
+    assert modernize["chunk_total"] == 5
+    assert modernize["failed_chunks"] == 5
+    assert "error" not in modernize
+    # 打ち切った残りも原文のまま残り、字は欠けない（チャンクの間は改行 1 つ）
+    assert _read(doc, "modern.txt").replace("\n", "") == normalize_text(_FIVE_ARTICLES)
 
 
 def test_single_legacy_output(tmp_path):

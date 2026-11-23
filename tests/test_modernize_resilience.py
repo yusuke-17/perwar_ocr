@@ -1,4 +1,4 @@
-"""口語体変換の失敗耐性（G2b/G2c）のテスト
+"""口語体変換の失敗耐性（G2b/G2c）と連続失敗の打ち切り（G9）のテスト
 
 1チャンクの失敗で成功済みチャンクを捨てないこと、
 失敗チャンクが原文のまま残って文字が欠けないことを確認する。
@@ -8,8 +8,14 @@ Ollama もモックライブラリも不要。
 
 import pytest
 
-from utils.ollama_client import OllamaTimeoutError
-from utils.text_modernizer import FewShotLeakError, ModernizeResult, TextModernizer
+from utils.config import _DEFAULTS
+from utils.ollama_client import OllamaRepeatError, OllamaTimeoutError
+from utils.text_modernizer import (
+    ChunkOverflowError,
+    FewShotLeakError,
+    ModernizeResult,
+    TextModernizer,
+)
 
 
 class _StubModernizer(TextModernizer):
@@ -245,3 +251,118 @@ def test_keyboard_interrupt_during_retry_keeps_rest():
     assert result.aborted is True
     assert result.text == f"[変換済み]{_S1}\n{_S2}\n{_S3}"
     assert result.failures == []
+
+
+# ---------- 連続失敗の打ち切り（G9） ----------
+
+
+# 1 文が 1 チャンクになる幅（「文10アイウエオカキ。」は 11 字）
+_ONE_SENTENCE = 11
+
+
+def _timeout() -> OllamaTimeoutError:
+    return OllamaTimeoutError("300 秒以内に応答しませんでした")
+
+
+def test_default_abort_after_is_three():
+    """既定では続けて 3 チャンク失敗したら打ち切る（OCR 側の batch. と同じ）"""
+    assert _DEFAULTS["chunk"]["abort_after_consecutive_failures"] == 3
+
+
+def test_consecutive_failures_abort_and_keep_rest(capsys):
+    """続けて 3 回時間切れになったら残りを送らずに原文のまま残し、未処理も失敗に数える"""
+    m = _StubModernizer(
+        fail_at={4: _timeout(), 5: _timeout(), 6: _timeout()},
+        chunk_size=_ONE_SENTENCE,
+        abort_after_consecutive_failures=3,
+    )
+    text = _text(10)
+
+    result = m.modernize_detailed(text)
+
+    assert m.calls == 6  # 7〜10 個目は LLM に送らない
+    assert result.chunk_total == 10
+    assert [f.index for f in result.failures] == [4, 5, 6, 7, 8, 9, 10]
+    assert all("未処理" in f.message for f in result.failures[3:])
+    assert result.text.count("[変換済み]") == 3
+    assert result.aborted is False  # Ctrl+C の中断（interrupted）とは区別する
+    stripped = result.text.replace("[変換済み]", "").replace("\n", "")
+    assert stripped == text  # 字は欠けない
+    out = capsys.readouterr().out
+    assert "連続 3 件失敗したため口語化を打ち切ります（未処理 4 チャンクは原文のまま）" in out
+
+
+def test_success_in_between_resets_count():
+    """成功を挟めば数え直すので、2 回ずつの失敗では打ち切らない"""
+    m = _StubModernizer(
+        fail_at={i: _timeout() for i in (2, 3, 5, 6)},
+        chunk_size=_ONE_SENTENCE,
+        abort_after_consecutive_failures=3,
+    )
+
+    result = m.modernize_detailed(_text(10))
+
+    assert m.calls == 10
+    assert len(result.failures) == 4
+
+
+def test_content_failures_are_not_counted():
+    """反復・生成の上限・お手本の混入による失敗は数えない（次のチャンクは成功しうる）"""
+    m = _StubModernizer(
+        fail_at={
+            1: OllamaRepeatError("反復"),
+            2: ChunkOverflowError("生成の上限"),
+            3: FewShotLeakError("お手本の例文が混入しました"),
+        },
+        chunk_size=_ONE_SENTENCE,
+        abort_after_consecutive_failures=3,
+    )
+
+    result = m.modernize_detailed(_text(10))
+
+    assert m.calls == 10
+    assert [f.index for f in result.failures] == [1, 2, 3]
+
+
+def test_uncounted_failure_does_not_reset_count():
+    """数えない失敗を挟んでも連続は続き、3 回目の時間切れで打ち切る"""
+    m = _StubModernizer(
+        fail_at={1: _timeout(), 2: _timeout(), 3: OllamaRepeatError("反復"), 4: _timeout()},
+        chunk_size=_ONE_SENTENCE,
+        abort_after_consecutive_failures=3,
+    )
+
+    result = m.modernize_detailed(_text(10))
+
+    assert m.calls == 4
+    assert len(result.failures) == 10
+
+
+def test_abort_disabled_with_zero():
+    """0 なら打ち切らず、全チャンク失敗しても最後まで送る"""
+    m = _StubModernizer(
+        fail_at={i: _timeout() for i in range(1, 11)},
+        chunk_size=_ONE_SENTENCE,
+        abort_after_consecutive_failures=0,
+    )
+
+    result = m.modernize_detailed(_text(10))
+
+    assert m.calls == 10
+    assert len(result.failures) == 10
+    assert all("未処理" not in f.message for f in result.failures)
+
+
+def test_abort_on_last_chunk_adds_nothing(capsys):
+    """最後のチャンクで連続失敗の数に達したら、未処理は無いので打ち切りの行も出さない"""
+    m = _StubModernizer(
+        fail_at={3: _timeout(), 4: _timeout(), 5: _timeout()},
+        chunk_size=_ONE_SENTENCE,
+        abort_after_consecutive_failures=3,
+    )
+
+    result = m.modernize_detailed(_text(5))
+
+    assert m.calls == 5
+    assert [f.index for f in result.failures] == [3, 4, 5]
+    assert "打ち切ります" not in capsys.readouterr().out
