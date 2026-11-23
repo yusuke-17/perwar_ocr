@@ -217,9 +217,34 @@ def ocr_options() -> dict:
     options = dict(CONFIG.get("ocr") or {})
     for key in _OCR_NON_OPTION_KEYS:
         options.pop(key, None)
-    if "num_predict" in options and int(options["num_predict"]) <= 0:
-        del options["num_predict"]
+    _drop_unlimited(options, ("num_predict",))
     return options
+
+
+def llm_options() -> dict:
+    """口語体変換の生成パラメータ（config.toml の [llm] セクション）
+
+    ocr_options() と対称。毎回新しい dict を返す。
+    num_ctx が 0 以下なら渡さない（＝Ollama の既定。VRAM の量で決まる。G13）。
+    num_predict が 0 以下なら渡さない（＝無制限）。
+    """
+    options = dict(CONFIG.get("llm") or {})
+    _drop_unlimited(options, ("num_ctx", "num_predict"))
+    return options
+
+
+def _drop_unlimited(options: dict, keys: tuple[str, ...]) -> None:
+    """options の整数の上限を int に直し、0 以下なら取り除く（＝渡さない）
+
+    config.toml に "8192" のように文字列で書かれても、Ollama に型の違う値を渡さない。
+    """
+    for key in keys:
+        if key in options:
+            value = int(options[key])
+            if value > 0:
+                options[key] = value
+            else:
+                del options[key]
 
 
 def ocr_retry_count() -> int:
@@ -292,8 +317,10 @@ def ollama_errors(model: str, timeout: float | None):
         # Ollama の反復検知: "prediction aborted, token repeat limit reached"（HTTP 500）。
         # 文言が将来変わったら、ここの判定文字列だけ直せばよい
         if e.status_code == 500 and "repeat" in str(e).lower():
+            # OCR と口語化のどちらでも起きるので、主語はモデル名にする
+            who = f"モデル '{model}'" if model else "モデル"
             raise OllamaRepeatError(
-                "OCRエンジンが同じ内容を繰り返したため、Ollama が出力を打ち切りました（反復検知）。\n"
+                f"{who} が同じ内容を繰り返したため、Ollama が出力を打ち切りました（反復検知）。\n"
                 f"→ 詳細: {e.error}"
             ) from e
         if "not found" in str(e).lower():

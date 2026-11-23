@@ -118,15 +118,20 @@ class EchoModernizer:
 
 
 class ScriptedChatModernizer(TextModernizer):
-    """本物の TextModernizer の LLM への送信（_chat）だけを差し替えたフェイク
+    """本物の TextModernizer の Ollama への送信（_request）だけを差し替えたフェイク
 
     replies を順に返す（尽きたら最後の応答を繰り返す）。送ったメッセージは sent に残る。
-    チャンク分割・お手本の混入の判定と再試行（G14）・失敗の吸収は本物の処理を通る。
+    応答には次のどれかを書ける:
+      - 文字列: 最後まで訳された応答（done_reason="stop"）
+      - (文字列, done_reason): "length" なら生成の上限で途切れた応答（G13）
+      - 例外: その回の送信で投げる（時間切れ・接続エラーなど）
+    チャンク分割・溢れの判定と分割（G13）・お手本の混入の判定と再試行（G14）・
+    失敗の吸収と連続失敗の打ち切り（G9）は本物の処理を通る。
     """
 
     model = "fake-llm"
 
-    def __init__(self, replies: list[str], **kwargs):
+    def __init__(self, replies: list, **kwargs):
         super().__init__(model=self.model, **kwargs)
         self.replies = replies
         self.sent: list[list[dict[str, str]]] = []
@@ -138,10 +143,14 @@ class ScriptedChatModernizer(TextModernizer):
     def _check_model_available(self) -> None:
         """モデル存在確認はテストでは不要なので無効化する"""
 
-    def _chat(self, messages):
+    def _request(self, messages):
         reply = self.replies[min(self.calls, len(self.replies) - 1)]
         self.sent.append(messages)
-        return reply
+        if isinstance(reply, BaseException):
+            raise reply
+        if isinstance(reply, tuple):
+            return reply
+        return reply, "stop"
 
 
 # ---------- NDLOCR-Lite ----------

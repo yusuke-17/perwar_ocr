@@ -21,10 +21,12 @@ from dataclasses import dataclass, field
 from utils.config import CONFIG
 from utils.ollama_client import (
     OllamaModelNotFoundError,
+    OllamaRepeatError,
     chat_client,
     generate_timeout,
     list_client,
     list_timeout,
+    llm_options,
     ollama_errors,
 )
 from utils.page_join import split_by_gap_markers
@@ -44,6 +46,11 @@ DEFAULT_ON_CHUNK_ERROR = CONFIG.get("chunk.on_error", "keep_original")
 
 # 結果に few-shot のお手本が混入したとき、お手本なしで変換し直すか（G14）
 DEFAULT_RETRY_WITHOUT_EXAMPLES = CONFIG.get("chunk.retry_without_examples", True)
+
+# 続けてこの数のチャンクが失敗したら、残りを LLM に送らずに打ち切る（G9）。0 以下で無効
+DEFAULT_ABORT_AFTER_CONSECUTIVE_FAILURES = CONFIG.get(
+    "chunk.abort_after_consecutive_failures", 3
+)
 
 SYSTEM_PROMPT = """\
 あなたは戦前の日本語を現代の読みやすい日本語に書き直す専門家です。
@@ -150,6 +157,27 @@ class FewShotLeakError(Exception):
     """
 
 
+class ChunkOverflowError(Exception):
+    """訳が生成の上限（num_ctx・num_predict）で途切れたときの例外（G13）
+
+    Ollama は上限に達してもエラーにせず done_reason="length" で止めるだけなので、
+    そのまま採用すると末尾の訳が黙って欠ける。_modernize_chunk が受け止めて
+    半分に分けて変換し直し、それでも途切れたら呼び出し元へ投げる
+    （modernize_detailed がほかの失敗と同じく原文のまま残す）。
+
+    without_examples: お手本なしで変換し直した訳が途切れたか（分けた半分もお手本なしで送るため）
+    """
+
+    def __init__(self, message: str, without_examples: bool = False):
+        super().__init__(message)
+        self.without_examples = without_examples
+
+
+# 連続失敗の打ち切りに数えない失敗（G9）。どれもチャンクの中身が原因で、
+# Ollama の停止と違い次のチャンクは成功しうる（OCR 側で反復を数えないのと同じ）
+_NOT_COUNTED_AS_CONSECUTIVE = (FewShotLeakError, OllamaRepeatError, ChunkOverflowError)
+
+
 # ---------- 結果の型 ----------
 
 
@@ -197,11 +225,13 @@ class TextModernizer:
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         on_chunk_error: str = DEFAULT_ON_CHUNK_ERROR,
         retry_without_examples: bool = DEFAULT_RETRY_WITHOUT_EXAMPLES,
+        abort_after_consecutive_failures: int = DEFAULT_ABORT_AFTER_CONSECUTIVE_FAILURES,
     ):
         self.model = model
         self.chunk_size = chunk_size
         self.on_chunk_error = on_chunk_error
         self.retry_without_examples = bool(retry_without_examples)
+        self.abort_after_consecutive_failures = int(abort_after_consecutive_failures)
 
     def modernize(self, text: str) -> str:
         """
@@ -227,7 +257,8 @@ class TextModernizer:
         1チャンクの変換に失敗しても、そのチャンクは**原文のまま採用して続行**する
         （on_chunk_error="abort" なら従来どおり例外送出）。50チャンク中1個の失敗で
         成功済み49個分のLLM処理を捨てないため。Ctrl+C も同様に、未処理チャンクを
-        原文のまま残して打ち切る。
+        原文のまま残して打ち切る。続けて abort_after_consecutive_failures 個失敗したときも、
+        残りを原文のまま残して打ち切り、失敗に数える（G9。Ollama が固まったとき全チャンク待たない）。
 
         Args:
             text: 変換対象のテキスト
@@ -261,6 +292,7 @@ class TextModernizer:
         modernized_chunks: list[str] = []
         failures: list[ChunkFailure] = []
         aborted = False
+        consecutive = 0  # 連続失敗の数（G9）
         show_print = not progress_active()
         for i, chunk in enumerate(
             track(chunks, total=len(chunks), description="    口語体変換中")
@@ -270,6 +302,7 @@ class TextModernizer:
             start = time.time()
             try:
                 result = self._modernize_chunk(chunk)
+                consecutive = 0
             except KeyboardInterrupt:
                 # 中断。未処理チャンクは原文のまま残して打ち切る（欠落させない）
                 print(f"\n    ⚠ 中断しました（{i + 1}/{len(chunks)} チャンク目）")
@@ -286,9 +319,29 @@ class TextModernizer:
                 )
                 failures.append(ChunkFailure(index=i + 1, message=str(e)))
                 result = chunk
+                # 中身が原因の失敗は数えない（戻しもしない。時間切れ→反復→時間切れ…でも打ち切れるように）
+                if not isinstance(e, _NOT_COUNTED_AS_CONSECUTIVE):
+                    consecutive += 1
             if show_print:
                 print(f"    → {time.time() - start:.1f}秒")
             modernized_chunks.append(result)
+
+            # Ollama が固まったときなど、続けて失敗したら残りを送らずに打ち切る（G9）。
+            # 残りは原文のまま残し、失敗に数える（meta.json の failed_chunks に入る）
+            limit = self.abort_after_consecutive_failures
+            if limit > 0 and consecutive >= limit:
+                rest = chunks[i + 1 :]
+                if rest:
+                    print(
+                        f"    ⚠ 連続 {consecutive} 件失敗したため口語化を打ち切ります"
+                        f"（未処理 {len(rest)} チャンクは原文のまま）"
+                    )
+                    modernized_chunks.extend(rest)
+                    failures.extend(
+                        ChunkFailure(index=j, message="連続失敗で打ち切ったため未処理")
+                        for j in range(i + 2, len(chunks) + 1)
+                    )
+                break
 
         # 区間ごとにリライト結果をつなぎ、目印は元の位置にそのまま戻す
         modernized_body = self._assemble(segments, segment_chunks, modernized_chunks)
@@ -440,8 +493,78 @@ class TextModernizer:
             pieces.append("".join(current))
         return pieces
 
+    @staticmethod
+    def _split_in_half(text: str) -> list[str]:
+        """溢れたチャンクを 2 つに分ける（G13）。分けられなければ 1 件のまま返す
+
+        真ん中にいちばん近い「。」の直後で切る。無ければ「、」か改行、それも無ければ
+        字数の真ん中で切る。真ん中から大きく外れた切れ目（前後 1/4 より外）は使わない
+        （片方が大きいままだと、また溢れるため）。切るだけで字は足さないので、
+        2 つをつなぐと元の text と一字も違わない。
+        """
+        if len(text) < 2:
+            return [text]
+        middle = len(text) / 2
+        low, high = len(text) / 4, len(text) * 3 / 4
+        for delimiters in (("。",), ("、", "\n")):
+            cuts = [
+                i + 1
+                for i, ch in enumerate(text)
+                if ch in delimiters and low <= i + 1 <= high
+            ]
+            if cuts:
+                cut = min(cuts, key=lambda c: abs(c - middle))
+                return [text[:cut], text[cut:]]
+        cut = len(text) // 2
+        return [text[:cut], text[cut:]]
+
     def _modernize_chunk(self, chunk: str) -> str:
         """1チャンクをOllama APIでリライトする
+
+        訳が生成の上限で途切れたら、チャンクを半分に分けて 1 回だけ変換し直し、
+        2 つの訳をつなぐ（G13）。途中までの訳は採用しない。
+        分けた片方がまた途切れたら ChunkOverflowError を投げ、チャンク全体を
+        呼び出し元の失敗処理（原文のまま残す / abort なら中止）に任せる。
+        - お手本つきの最初の変換が途切れたら、半分もお手本つきで始める
+          （混入の判定と変換し直し（G14）も通常どおり）
+        - お手本なしで変換し直した訳が途切れたら、半分もお手本なしで送る
+          （お手本つきに戻すと、混入→変換し直しを半分ごとに繰り返すため）
+        - 空白・改行だけの半分は LLM に送らずそのまま残す（空の入力から文を作らせない）
+        """
+        try:
+            return self._convert(chunk)
+        except ChunkOverflowError as e:
+            with_examples = not e.without_examples
+        halves = self._split_in_half(chunk)
+        if len(halves) < 2:
+            raise ChunkOverflowError("訳が生成の上限で途切れました")
+        print("    ⚠ 訳が生成の上限で途切れました。チャンクを半分に分けて変換し直します")
+        try:
+            parts = [
+                self._convert(half, with_examples) if half.strip() else half
+                for half in halves
+            ]
+        except ChunkOverflowError as e:
+            raise ChunkOverflowError(
+                "訳が生成の上限で途切れました（半分に分けても収まりません）"
+            ) from e
+        return self._join_halves(halves, parts)
+
+    @staticmethod
+    def _join_halves(halves: list[str], parts: list[str]) -> str:
+        """分けて変換した 2 つの訳をつなぐ
+
+        切れ目に改行があった（前半の末尾か後半の先頭が改行）ときだけ改行 1 つでつなぐ。
+        「。」「、」や字数の真ん中で切ったときは何も挟まない（段落の途中に改行を入れない）。
+        訳は前後の空白を落としてあるので、改行の有無は原文の切れ目で見る。
+        """
+        first, second = halves
+        boundary = first[len(first.rstrip()) :] + second[: len(second) - len(second.lstrip())]
+        separator = "\n" if "\n" in boundary else ""
+        return separator.join(parts)
+
+    def _convert(self, chunk: str, with_examples: bool = True) -> str:
+        """1チャンクを変換する（お手本の混入の判定と変換し直しを含む）
 
         まずお手本つきで変換する。結果に few-shot のお手本が混入していたら、
         お手本を外して 1 回だけ変換し直し、その結果を判定せずに採用する（G14）。
@@ -450,16 +573,22 @@ class TextModernizer:
           （引用がチャンクの境目で切れた場合など）だけなので、正しい訳を捨てない
         retry_without_examples が False なら FewShotLeakError を投げ、呼び出し元の
         失敗処理（原文のまま残す / abort なら中止）に任せる。
+        with_examples=False なら最初からお手本なしで送り、判定しない（G13 の分割用）。
+        お手本なしの訳が途切れたら、without_examples=True の ChunkOverflowError を投げる。
         """
-        result = self._chat(self._build_messages(chunk))
-        marker = find_few_shot_leak(chunk, result)
-        if marker is None:
-            return result
-        terms = "・".join(marker.output_terms)
-        if not self.retry_without_examples:
-            raise FewShotLeakError(f"お手本の例文が混入しました（{terms}）")
-        print(f"    ⚠ お手本の例文の混入を検出（{terms}）。お手本なしで変換し直します")
-        return self._chat(self._build_messages(chunk, with_examples=False))
+        if with_examples:
+            result = self._chat(self._build_messages(chunk))
+            marker = find_few_shot_leak(chunk, result)
+            if marker is None:
+                return result
+            terms = "・".join(marker.output_terms)
+            if not self.retry_without_examples:
+                raise FewShotLeakError(f"お手本の例文が混入しました（{terms}）")
+            print(f"    ⚠ お手本の例文の混入を検出（{terms}）。お手本なしで変換し直します")
+        try:
+            return self._chat(self._build_messages(chunk, with_examples=False))
+        except ChunkOverflowError as e:
+            raise ChunkOverflowError(str(e), without_examples=True) from e
 
     @staticmethod
     def _build_messages(chunk: str, with_examples: bool = True) -> list[dict[str, str]]:
@@ -475,17 +604,31 @@ class TextModernizer:
         return messages
 
     def _chat(self, messages: list[dict[str, str]]) -> str:
-        """Ollama にメッセージを送り、応答の本文を返す"""
+        """Ollama にメッセージを送り、応答の本文を返す
+
+        生成の上限（num_ctx・num_predict）で途切れた応答（done_reason="length"）は採用せず、
+        ChunkOverflowError を投げる（G13。Ollama はエラーにせず黙って止めるため）。
+        お手本の混入の判定より先に行う（途切れた訳を判定しても意味がない）。
+        """
+        content, done_reason = self._request(messages)
+        if done_reason == "length":
+            raise ChunkOverflowError("訳が生成の上限で途切れました")
+        return content
+
+    def _request(self, messages: list[dict[str, str]]) -> tuple[str, str | None]:
+        """Ollama にメッセージを送り、(応答の本文, done_reason) を返す
+
+        done_reason は "stop"（自然に終了）か "length"（生成の上限で打ち切り）。
+        """
         with ollama_errors(self.model, generate_timeout()):
             response = chat_client().chat(
                 model=self.model,
                 messages=messages,
                 think=False,
-                # コピーを渡す（渡した先で書き換えられても設定を汚さない）
-                options=dict(CONFIG.get("llm") or {}),
+                options=llm_options(),
             )
 
-        return response.message.content.strip()
+        return response.message.content.strip(), response.done_reason
 
     def _check_model_available(self) -> None:
         """指定モデルがOllamaにインストール済みかチェック"""

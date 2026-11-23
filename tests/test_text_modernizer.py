@@ -4,7 +4,8 @@ text_modernizer._split_text が、句読点の乏しい戦前文書でも
 全チャンクを chunk_size 以下に収め、本文後半を欠落させないことを確認する。
 _split_text は Ollama 非依存の純粋関数なのでモック不要。
 後半の目印のテストは、LLM への送信（_chat）だけを差し替えた子クラスで確かめる。
-末尾は few-shot のお手本の混入の判定と、お手本なしでの変換し直し（G14）のテスト。
+後半は few-shot のお手本の混入の判定と、お手本なしでの変換し直し（G14）のテスト。
+末尾は訳が生成の上限で途切れたチャンクを半分に分けて変換し直す（G13）テスト。
 """
 
 import pytest
@@ -13,6 +14,7 @@ from fakes import ScriptedChatModernizer
 from utils.text_modernizer import (
     FEW_SHOT_EXAMPLES,
     SYSTEM_PROMPT,
+    ChunkOverflowError,
     FewShotLeakError,
     TextModernizer,
     find_few_shot_leak,
@@ -375,3 +377,177 @@ def test_tax_document_with_kokumin_is_not_leak():
 def test_imperial_ancestors_in_other_words_is_not_leak(source):
     """「皇室の祖先」は祖宗・皇宗・列聖の訳にもなるので、原文にあれば混入としない"""
     assert find_few_shot_leak(source, "皇室の祖先の教えに従い") is None
+
+
+# ---------- 溢れたチャンクを半分に分ける（G13） ----------
+#
+# 文はどれも架空のカタカナ文語（資料の本文は使わない）。
+
+_A1 = "第一條 本令ハ陸軍ノ兵器ニ之ヲ適用ス。"
+_A2 = "第二條 兵器ノ保管ハ各部隊長之ヲ掌ル。"
+_TWO = _A1 + _A2
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        _TWO,
+        _A1 + _A2 + "第三條 本令ハ公布ノ日ヨリ施行ス",  # 「。」で終わらない
+        "兵器ノ保管ハ各部隊長之ヲ掌リ、其ノ員數ヲ毎月報告スベシ",  # 「、」だけ
+        "兵器ノ保管ハ各部隊長之ヲ掌リ其ノ員數ヲ毎月報告スベシ",  # 句読点なし
+        "本令ハ陸軍ノ兵器ニ之ヲ適用ス\n兵器ノ保管ハ各部隊長之ヲ掌ル\n",  # 改行
+    ],
+    ids=["two-sentences", "no-final-period", "comma-only", "no-punctuation", "newlines"],
+)
+def test_split_in_half_adds_no_characters(text):
+    """2 つに分け、つなぐと元と一字も違わない（原文に「。」などを足さない）"""
+    halves = TextModernizer._split_in_half(text)
+
+    assert len(halves) == 2
+    assert all(half.strip() for half in halves)
+    assert "".join(halves) == text
+
+
+def test_split_in_half_cuts_after_period_near_middle():
+    """真ん中にいちばん近い「。」の直後で切る"""
+    assert TextModernizer._split_in_half(_TWO) == [_A1, _A2]
+
+
+def test_split_in_half_prefers_period_over_comma():
+    """「。」があれば「、」より優先する"""
+    text = "本令ハ陸軍ノ兵器、彈藥ニ之ヲ適用ス。兵器ノ保管ハ各部隊長、各廠長之ヲ掌ル。"
+
+    first, _ = TextModernizer._split_in_half(text)
+
+    assert first.endswith("。")
+
+
+def test_split_in_half_ignores_period_far_from_middle():
+    """真ん中から大きく外れた「。」では切らない（片方が大きいままだとまた溢れる）"""
+    text = "通牒ス。" + "兵器ノ保管ハ各部隊長之ヲ掌リ其ノ員數ヲ毎月報告スベシ"
+
+    first, second = TextModernizer._split_in_half(text)
+
+    assert first != "通牒ス。"
+    assert abs(len(first) - len(second)) <= 1
+
+
+def test_split_in_half_single_character_is_not_split():
+    """1 字は分けられないので 1 件のまま返す"""
+    assert TextModernizer._split_in_half("ス") == ["ス"]
+
+
+def test_overflow_is_split_and_retried(capsys):
+    """途切れた訳は採用せず、半分ずつ変換し直した訳をつなぐ。失敗には数えない
+
+    「。」で切ったので、段落の途中に原文に無い改行は入れない。
+    """
+    m = ScriptedChatModernizer([("第一条 この令は陸軍の", "length"), "第一条の訳。", "第二条の訳。"])
+
+    result = m.modernize_detailed(_TWO)
+
+    assert result.text == "第一条の訳。第二条の訳。"
+    assert "この令は陸軍の" not in result.text
+    assert result.failures == []
+    assert m.calls == 3
+    assert [s[-1]["content"] for s in m.sent] == [_TWO, _A1, _A2]
+    assert "チャンクを半分に分けて変換し直します" in capsys.readouterr().out
+
+
+def test_overflow_after_split_keeps_original_chunk():
+    """分けた片方がまた途切れたら、そのチャンク全体を原文のまま残し、ほかのチャンクは変換する"""
+    m = ScriptedChatModernizer(
+        [("途中", "length"), "第一条の訳。", ("途中", "length"), "第三条の訳。"],
+        chunk_size=len(_TWO),
+    )
+    third = "第三條 本令ハ公布ノ日ヨリ施行ス。"
+
+    result = m.modernize_detailed(_TWO + third)
+
+    assert result.chunk_total == 2
+    assert result.text == f"{_TWO}\n第三条の訳。"
+    assert [f.index for f in result.failures] == [1]
+    assert "生成の上限" in result.failures[0].message
+    assert "半分に分けても収まりません" in result.failures[0].message
+
+
+def test_overflow_failure_adds_no_period():
+    """「。」で終わらないチャンクが分けても途切れて原文に戻るとき、「。」は付かない"""
+    source = _A1 + "第二條 兵器ノ保管ハ各部隊長之ヲ掌ル"
+    m = ScriptedChatModernizer([("途中", "length"), "第一条の訳。", ("途中", "length")])
+
+    result = m.modernize_detailed(source)
+
+    assert result.text == source
+    assert not result.text.endswith("。")
+
+
+def test_overflow_with_abort_raises():
+    """on_chunk_error='abort' なら、分けても途切れたときに ChunkOverflowError が伝わる"""
+    m = ScriptedChatModernizer([("途中", "length")], on_chunk_error="abort")
+
+    with pytest.raises(ChunkOverflowError):
+        m.modernize_detailed(_TWO)
+
+
+def test_overflow_of_retry_without_examples_is_split_without_examples():
+    """お手本なしで変換し直した訳が途切れたら、半分もお手本なしで送り、判定しない
+
+    お手本つきに戻すと、混入→変換し直しを半分ごとに繰り返してしまう。
+    """
+    # 3 回目の訳はお手本由来の語を含むが、お手本なしの訳なので判定せずに採用する
+    m = ScriptedChatModernizer(
+        [_LEAK + _CLEAN, ("途中", "length"), "前半の訳。常陸", "後半の訳。"]
+    )
+
+    result = m.modernize_detailed(_TWO)
+
+    assert result.text == "前半の訳。常陸後半の訳。"
+    assert result.failures == []
+    assert m.calls == 4
+    assert _has_examples(m.sent[0])
+    assert not any(_has_examples(sent) for sent in m.sent[1:])
+    assert [sent[-1]["content"] for sent in m.sent[2:]] == [_A1, _A2]
+
+
+def test_halves_are_checked_for_leak():
+    """お手本つきの訳が途切れたら、半分もお手本つきで始め、混入したらお手本なしで変換し直す"""
+    m = ScriptedChatModernizer([("途中", "length"), _LEAK + "前半の訳。", "前半の訳。", "後半の訳。"])
+
+    result = m.modernize_detailed(_TWO)
+
+    assert result.text == "前半の訳。後半の訳。"
+    assert m.calls == 4
+    assert _has_examples(m.sent[1])
+    assert not _has_examples(m.sent[2])
+    assert _has_examples(m.sent[3])
+    assert m.sent[2][-1]["content"] == _A1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [_A1 + "\n" + _A2, _A1.rstrip("。") + "\n" + _A2],
+    ids=["period-then-newline", "newline-only"],
+)
+def test_split_at_newline_keeps_one_newline(text):
+    """切れ目に改行があったときは、2 つの訳を改行 1 つでつなぐ（原文の行の区切りを保つ）"""
+    m = ScriptedChatModernizer([("途中", "length"), "第一条の訳。", "第二条の訳。"])
+
+    result = m.modernize_detailed(text)
+
+    assert result.text == "第一条の訳。\n第二条の訳。"
+
+
+def test_whitespace_only_half_is_not_sent():
+    """空白・改行だけの半分は LLM に送らず、そのまま残す（空の入力から文を作らせない）"""
+    body = "兵器ノ保管ハ各部隊長之ヲ掌リ其ノ員數ヲ報告ス"  # 「。」なし 21 字
+    text = body + "\n" * 21
+    assert TextModernizer._split_in_half(text)[1].strip() == ""  # 後半が空白だけになる入力
+    m = ScriptedChatModernizer([("途中", "length"), "兵器の保管は各部隊長が受け持つ。"])
+
+    result = m.modernize_detailed(text)
+
+    assert m.calls == 2
+    assert [sent[-1]["content"] for sent in m.sent] == [text, body + "\n"]
+    assert result.text.startswith("兵器の保管は各部隊長が受け持つ。")
+    assert result.failures == []

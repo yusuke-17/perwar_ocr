@@ -1,4 +1,4 @@
-"""OCRの生成パラメータとタイムアウト（G4）のテスト
+"""OCR・口語化の生成パラメータとタイムアウト（G4・G13）のテスト
 
 Ollamaは起動していなくてよい。ollama.Client の生成は通信を伴わず、
 例外の翻訳は ollama_errors に閉じているため、どちらも実物のまま検証できる。
@@ -10,7 +10,7 @@ import numpy as np
 import ollama
 import pytest
 
-from utils import ollama_client
+from utils import ollama_client, text_modernizer
 from utils.ollama_client import (
     OllamaConnectionError,
     OllamaModelNotFoundError,
@@ -21,12 +21,14 @@ from utils.ollama_client import (
     generate_timeout,
     list_client,
     list_timeout,
+    llm_options,
     ocr_options,
     ocr_retry_count,
     ollama_errors,
     ollama_version,
     trim_repetition,
 )
+from utils.text_modernizer import ChunkOverflowError, TextModernizer
 
 
 class _FakeConfig:
@@ -251,6 +253,78 @@ def test_timeout_message_tells_how_to_extend():
     message = str(excinfo.value)
     assert "300 秒" in message
     assert "generate_timeout_seconds" in message
+
+
+# ---------- G13: 口語化のコンテキスト長と生成の上限 ----------
+
+
+def test_llm_num_ctx_is_8192_by_default():
+    """口語化には既定で num_ctx 8192 を明示して渡す（Ollama の既定は環境で変わるため）"""
+    assert llm_options()["num_ctx"] == 8192
+
+
+def test_llm_num_predict_is_capped_by_default():
+    """訳のトークン数の上限 3072 を渡す（暴走したとき、時間切れより先に length で止めるため）"""
+    assert llm_options()["num_predict"] == 3072
+
+
+@pytest.mark.parametrize("key", ["num_ctx", "num_predict"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_zero_llm_limits_are_not_sent(monkeypatch, key, value):
+    """0 以下なら渡さない（num_ctx は Ollama の既定に、num_predict は無制限に戻す退避口）"""
+    monkeypatch.setattr(
+        ollama_client, "CONFIG", _FakeConfig({"llm": {"temperature": 0.5, key: value}})
+    )
+
+    assert key not in llm_options()
+
+
+def test_string_limits_are_sent_as_int(monkeypatch):
+    """config.toml に文字列で書かれても、整数に直して Ollama に渡す"""
+    monkeypatch.setattr(
+        ollama_client,
+        "CONFIG",
+        _FakeConfig({"llm": {"num_ctx": "8192", "num_predict": "3072"}, "ocr": {"num_predict": "1024"}}),
+    )
+
+    assert llm_options() == {"num_ctx": 8192, "num_predict": 3072}
+    assert ocr_options() == {"num_predict": 1024}
+
+
+@pytest.mark.parametrize("done_reason", ["stop", "length"])
+def test_modernizer_request_returns_done_reason(monkeypatch, done_reason):
+    """口語化の送信は num_ctx を渡し、本文と done_reason を返す"""
+    chat = _FakeChatClient(content="  訳した文  ", done_reason=done_reason)
+    monkeypatch.setattr(text_modernizer, "chat_client", lambda: chat)
+
+    result = TextModernizer()._request([{"role": "user", "content": "本令ハ公布ノ日ヨリ施行ス。"}])
+
+    assert result == ("訳した文", done_reason)
+    assert chat.calls[0]["options"]["num_ctx"] == 8192
+    assert chat.calls[0]["options"]["num_predict"] == 3072
+
+
+def test_modernizer_chat_rejects_truncated_reply(monkeypatch):
+    """生成の上限で途切れた応答（done_reason=length）は採用せず ChunkOverflowError にする"""
+    chat = _FakeChatClient(content="途中まで", done_reason="length")
+    monkeypatch.setattr(text_modernizer, "chat_client", lambda: chat)
+
+    with pytest.raises(ChunkOverflowError):
+        TextModernizer()._chat([{"role": "user", "content": "本令ハ公布ノ日ヨリ施行ス。"}])
+
+
+@pytest.mark.parametrize("model", ["glm-ocr", "qwen3.5:9b"])
+def test_repeat_message_names_the_model(model):
+    """反復検知の文言は OCR と口語化のどちらでも読めるよう、主語をモデル名にする"""
+    with pytest.raises(OllamaRepeatError) as excinfo:
+        with ollama_errors(model, 300):
+            raise ollama.ResponseError(
+                '{"error":"prediction aborted, token repeat limit reached"}', 500
+            )
+
+    message = str(excinfo.value)
+    assert f"モデル '{model}' が同じ内容を繰り返した" in message
+    assert "OCRエンジン" not in message
 
 
 def test_other_response_errors_pass_through():
